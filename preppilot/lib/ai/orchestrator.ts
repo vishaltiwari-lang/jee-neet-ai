@@ -5,7 +5,11 @@ import { validateOutput } from "./guardrails";
 import { detectSelfHarm } from "./safety";
 import { REFUSAL_MESSAGE, OUT_OF_SCOPE_MESSAGE, HELPLINE_MESSAGE, FALLBACK_MESSAGE } from "./refusal";
 import { openaiModel } from "./provider";
-import { assessSyllabusCoverage, buildOutOfSyllabusMessage } from "@/lib/knowledge/syllabus";
+import {
+  assessSyllabusCoverage,
+  buildOutOfSyllabusMessage,
+  buildSyllabusResponse,
+} from "@/lib/knowledge/syllabus";
 import { getProfile } from "@/lib/services/profile";
 import {
   appendMessage,
@@ -86,6 +90,23 @@ export async function orchestrate(input: OrchestratorInput): Promise<Orchestrato
   const isSelfHarm = detectSelfHarm(message);
   if (isSelfHarm) {
     await flagConversation({ conversationId, userId, reason: "self_harm_keyword" });
+  }
+
+  const syllabusResponse = buildSyllabusResponse(message, {
+    class: profile.class,
+    targetExam: profile.targetExam,
+  });
+  if (syllabusResponse) {
+    const text = isSelfHarm
+      ? `${HELPLINE_MESSAGE}\n\n---\n\n${syllabusResponse}`
+      : syllabusResponse;
+    await appendMessage(conversationId, {
+      role: "assistant",
+      content: text,
+      intentLabel: "strategy",
+      model: "deterministic",
+    });
+    return { kind: "deterministic", conversationId, text, label: "strategy", flagged: isSelfHarm };
   }
 
   const intent = await classifyIntent(message);

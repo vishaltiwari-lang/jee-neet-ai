@@ -62,6 +62,9 @@ function normalize(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 }
 
+const SYLLABUS_REQUEST_REGEX =
+  /\b(syllabus|chapter list|unit list|official topics|what should i study|what are the units)\b/i;
+
 function titleCase(subject: string): string {
   return subject.charAt(0).toUpperCase() + subject.slice(1);
 }
@@ -210,4 +213,89 @@ export function buildOutOfSyllabusMessage(profile: SyllabusProfile): string {
     .join("\n");
 
   return `That topic does not match the loaded syllabus knowledge base for your selected exam(s). I can only plan inside syllabus-listed units.\n\nTry with one of these unit groups:\n${preview}`;
+}
+
+function mergeSubjectsForTracks(tracks: SyllabusTrack[]): SyllabusSubject[] {
+  const merged = new Map<string, Set<string>>();
+  for (const track of tracks) {
+    for (const subject of track.subjects) {
+      if (!merged.has(subject.name)) {
+        merged.set(subject.name, new Set<string>());
+      }
+      const units = merged.get(subject.name);
+      if (!units) continue;
+      for (const unit of subject.units) {
+        units.add(unit);
+      }
+    }
+  }
+  return Array.from(merged.entries()).map(([name, units]) => ({
+    name,
+    units: Array.from(units),
+  }));
+}
+
+function resolveRequestedExams(message: string, fallback: readonly TargetExam[]): TargetExam[] {
+  const normalized = normalize(message);
+  const exams = new Set<TargetExam>();
+
+  if (/\bjee\b|\bjee\s*main\b|\bjee\s*advanced\b/.test(normalized)) {
+    exams.add("jee_main");
+    exams.add("jee_advanced");
+  }
+  if (/\bneet\b/.test(normalized)) {
+    exams.add("neet");
+  }
+
+  if (exams.size === 0) {
+    for (const exam of fallback) exams.add(exam);
+  }
+
+  return Array.from(exams);
+}
+
+function formatTrackSyllabus(title: string, subjects: SyllabusSubject[]): string {
+  if (subjects.length === 0) return "";
+  const lines: string[] = [];
+  lines.push(`## ${title}`);
+  for (const subject of subjects) {
+    lines.push(`### ${titleCase(subject.name)}`);
+    for (const unit of subject.units) {
+      lines.push(`- ${unit}`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n").trim();
+}
+
+export function buildSyllabusResponse(
+  message: string,
+  profile: SyllabusProfile,
+): string | null {
+  if (!SYLLABUS_REQUEST_REGEX.test(message)) {
+    return null;
+  }
+
+  const requestedExams = resolveRequestedExams(message, profile.targetExam);
+  const wantsJee = requestedExams.some((e) => e === "jee_main" || e === "jee_advanced");
+  const wantsNeet = requestedExams.includes("neet");
+
+  const jeeTracks = kb.tracks.filter((t) =>
+    t.exams.some((e) => e === "jee_main" || e === "jee_advanced"),
+  );
+  const neetTracks = kb.tracks.filter((t) => t.exams.includes("neet"));
+
+  const sections: string[] = [];
+  if (wantsJee) {
+    const subjects = mergeSubjectsForTracks(jeeTracks);
+    sections.push(formatTrackSyllabus("JEE (Main/Advanced) Syllabus", subjects));
+  }
+  if (wantsNeet) {
+    const subjects = mergeSubjectsForTracks(neetTracks);
+    sections.push(formatTrackSyllabus("NEET Syllabus", subjects));
+  }
+
+  const response = sections.filter(Boolean).join("\n\n");
+  if (!response) return "I could not load the syllabus sections right now. Please try again.";
+  return `${response}\n\nTell me your class and weak chapters, and I will convert this into a realistic weekly plan.`;
 }

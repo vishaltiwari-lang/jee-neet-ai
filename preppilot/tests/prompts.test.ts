@@ -42,7 +42,8 @@ describe("profileSummary", () => {
 describe("buildSystemPrompt", () => {
   it("contains hard rules", () => {
     const s = buildSystemPrompt(baseProfile);
-    expect(s).toContain("NEVER solve numerical problems");
+    expect(s).toContain("NEVER provide solved final answers");
+    expect(s).toContain("Allowed: conceptual explanation");
     expect(s).toContain("DIAGNOSTIC QUESTION POLICY");
     expect(s).toContain("Quick Diagnosis");
     expect(s).toContain("SYLLABUS KNOWLEDGE BASE");
@@ -68,5 +69,7 @@ describe("buildClassifierPrompt", () => {
     for (const label of ["academic_solve", "plan_request", "strategy", "motivation", "clarification", "out_of_scope"]) {
       expect(p).toContain(label);
     }
+    expect(p).toContain("concept/theory explanation");
+    expect(p).toContain("syllabus/chapters/what-to-study");
   });
 });

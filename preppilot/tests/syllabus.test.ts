@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assessSyllabusCoverage,
+  buildSyllabusResponse,
   buildOutOfSyllabusMessage,
   buildSyllabusPromptSection,
 } from "@/lib/knowledge/syllabus";
@@ -53,5 +54,17 @@ describe("syllabus knowledge base", () => {
     const msg = buildOutOfSyllabusMessage(neetProfile);
     expect(msg).toContain("loaded syllabus knowledge base");
     expect(msg).toContain("Biology");
+  });
+
+  it("returns syllabus output for explicit syllabus requests", () => {
+    const response = buildSyllabusResponse("show me jee syllabus", jeeProfile);
+    expect(response).toContain("JEE (Main/Advanced) Syllabus");
+    expect(response).toContain("Mathematics");
+  });
+
+  it("returns both tracks when user asks for jee and neet syllabus", () => {
+    const response = buildSyllabusResponse("please share jee and neet syllabus", neetProfile);
+    expect(response).toContain("JEE (Main/Advanced) Syllabus");
+    expect(response).toContain("NEET Syllabus");
   });
 });
