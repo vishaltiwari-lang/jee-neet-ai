@@ -34,6 +34,12 @@ const kb = syllabusKb as SyllabusKb;
 const TOPIC_CUE_REGEX =
   /\b(topic|chapter|unit|syllabus|plan|planner|revision|revise|schedule|roadmap|study)\b/i;
 
+const ACADEMIC_ASSISTANCE_REGEX =
+  /\b(jee|neet|physics|chemistry|math|maths|biology|ncert|pyq|mock|revision|study|timetable|schedule|backlog|test|marks|consistency|time management|numerical|practice|chapter|subject)\b/i;
+
+const CLEAR_OUT_OF_SCOPE_REGEX =
+  /\b(coding|programming|python|javascript|react|node|website|app development|recipe|poem|song|movie|travel plan|stock market|crypto|politics|resume)\b/i;
+
 const STOPWORDS = new Set([
   "unit",
   "and",
@@ -101,8 +107,11 @@ function unitTerms(unit: string): string[] {
   if (normalized) terms.add(normalized);
 
   for (const token of normalized.split(" ")) {
-    if (token.length < 5 || STOPWORDS.has(token)) continue;
+    if (token.length < 4 || STOPWORDS.has(token)) continue;
     terms.add(token);
+    if (token.endsWith("s") && token.length >= 5) {
+      terms.add(token.slice(0, -1));
+    }
   }
 
   return Array.from(terms);
@@ -156,6 +165,23 @@ export function assessSyllabusCoverage(message: string, profile: SyllabusProfile
 
   if (matched.size > 0) {
     return { status: "covered", matchedUnits: Array.from(matched) };
+  }
+
+  // If the request is clearly unrelated to JEE/NEET prep, block it.
+  const hasAcademicContext = ACADEMIC_ASSISTANCE_REGEX.test(normalizedMessage);
+  if (CLEAR_OUT_OF_SCOPE_REGEX.test(normalizedMessage)) {
+    return {
+      status: "out_of_syllabus",
+      matchedUnits: [],
+      reason: "request appears unrelated to JEE/NEET syllabus assistance",
+    };
+  }
+
+  // Genuine student support questions (time management, numericals strategy,
+  // backlog handling, revision methods, test analysis) should not be blocked
+  // even when no exact chapter token is present.
+  if (hasAcademicContext) {
+    return { status: "covered", matchedUnits: [] };
   }
 
   if (!TOPIC_CUE_REGEX.test(normalizedMessage)) {

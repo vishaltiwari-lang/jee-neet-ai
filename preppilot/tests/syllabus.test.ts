@@ -28,6 +28,22 @@ describe("syllabus knowledge base", () => {
     expect(result.status).toBe("covered");
   });
 
+  it("allows genuine student strategy help even without exact unit match", () => {
+    const result = assessSyllabusCoverage(
+      "I can study only 2 hours now but teacher says 6 to 8 for numericals. How should I improve?",
+      jeeProfile,
+    );
+    expect(result.status).toBe("covered");
+  });
+
+  it("allows chapter help phrased with common aliases", () => {
+    const result = assessSyllabusCoverage(
+      "I understand Newton's laws theory but cannot solve numericals. Make a plan.",
+      jeeProfile,
+    );
+    expect(result.status).toBe("covered");
+  });
+
   it("blocks explicit out-of-syllabus topic requests", () => {
     const result = assessSyllabusCoverage("Make a chapter-wise plan for computer science and coding", neetProfile);
     expect(result.status).toBe("out_of_syllabus");
