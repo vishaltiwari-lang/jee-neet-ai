@@ -1,0 +1,16 @@
+# Workspace-only artifacts
+venv/
+context/
+checklist/
+project-logs/
+graphify-out/
+syllabuspdf/
+
+# Local and generated outputs
+.DS_Store
+*.log
+__pycache__/
+
+# Project analysis artifacts
+preppilot/graphify-out/
+preppilot/project_graph.html

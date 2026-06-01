@@ -1,0 +1,179 @@
+{
+  "version": 1,
+  "generatedAt": "2026-05-28T10:46:33.023045+00:00",
+  "sources": [
+    {
+      "exam": "jee_main",
+      "filePath": "../syllabuspdf/jeesyllabus.pdf",
+      "fileName": "jeesyllabus.pdf"
+    },
+    {
+      "exam": "neet",
+      "filePath": "../syllabuspdf/neetsyllabus.pdf",
+      "fileName": "neetsyllabus.pdf"
+    }
+  ],
+  "tracks": [
+    {
+      "id": "jee-main-neet-prep-jee",
+      "exams": [
+        "jee_main",
+        "jee_advanced"
+      ],
+      "classes": [
+        "class_11",
+        "class_12",
+        "dropper"
+      ],
+      "subjects": [
+        {
+          "name": "mathematics",
+          "units": [
+            "Unit 1: SETS, RELATIONS AND FUNCTIONS",
+            "Unit 2: COMPLEX NUMBERS AND QUADRATIC EQUATIONS",
+            "Unit 3: MATRICES AND DETERMINANTS",
+            "Unit 4: PERMUTATIONS AND COMBINATIONS",
+            "Unit 5: BINOMIAL THEOREM AND ITS SIMPLE APPLICATIONS",
+            "Unit 6: SEQUENCE AND SERIES",
+            "Unit 7: LIMIT, CONTINUITY AND DIFFERENTIABILITY",
+            "Unit 8: INTEGRAL CALCULAS",
+            "Unit 9: DIFFRENTIAL EQUATIONS",
+            "Unit 10: CO-ORDINATE GEOMETRY",
+            "Unit 11: THREE DIMENSIONAL GEOMETRY",
+            "Unit 12: VECTOR ALGEBRA",
+            "Unit 13: STATISTICS AND PROBABILITY",
+            "Unit 14: TRIGONOMETRY"
+          ]
+        },
+        {
+          "name": "physics",
+          "units": [
+            "Unit 1: Units and Measurements",
+            "Unit 2: Kinematics",
+            "Unit 3: Laws of Motion",
+            "Unit 4: Work, Energy and Power",
+            "Unit 5: Rotational Motion",
+            "Unit 6: Gravitation",
+            "Unit 7: Properties of Solids and Liquids",
+            "Unit 8: Thermodynamics",
+            "Unit 9: Kinetic Theory of Gases",
+            "Unit 10: Oscillations and Waves",
+            "Unit 11: Electrostatics",
+            "Unit 12: Current Electricity",
+            "Unit 13: Magnetic Effects of Current and Magnetism",
+            "Unit 14: Electromagnetic Induction and Alternating Currents",
+            "Unit 15: Electromagnetic Waves",
+            "Unit 16: Optics",
+            "Unit 17: Dual Nature of Matter and Radiation",
+            "Unit 18: Atoms and Nuclei",
+            "Unit 19: Electronic Devices",
+            "Unit 20: Experimental Skills"
+          ]
+        },
+        {
+          "name": "chemistry",
+          "units": [
+            "Unit I: SOME BASIC CONCEPTS IN CHEMISTRY",
+            "Unit 2: ATOMIC STRUCTURE",
+            "Unit 3: CHEMICAL BONDING AND MOLECULAR STRUCTURE",
+            "Unit 4: CHEMICAL THERMODYNAMICS",
+            "Unit 5: SOLUTIONS",
+            "Unit 6: EQUILIBRIUM",
+            "Unit 7: REDOX REACTIONS AND ELECTROCHEMISTRY",
+            "Unit 8: CHEMICAL KINETICS",
+            "Unit 9: CLASSIFICATION OF ELEMENTS AND PERIODICITY IN PROPERTIES",
+            "Unit 10: p- BLOCK ELEMENTS",
+            "Unit 11: d - and f- BLOCK ELEMENTS",
+            "Unit 12: COORDINATION COMPOUNDS",
+            "Unit 13: PURIFICATION AND CHARACTERISATION OF ORGANIC COMPOUNDS",
+            "Unit 14: SOME BASIC PRINCIPLES OF ORGANIC CHEMISTRY",
+            "Unit 15: HYDROCARBONS",
+            "Unit 16: ORGANIC COMPOUNDS CONTAINING HALOGENS",
+            "Unit 17: ORGANIC COMPOUNDS CONTAINING OXYGEN",
+            "Unit 18: ORGANIC COMPOUNDS CONTAINING NITROGEN",
+            "Unit 19: BIOMOLECULES",
+            "Unit 20: PRINCIPLES RELATED TO PRACTICAL CHEMISTRY"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "neet-prep-neet",
+      "exams": [
+        "neet"
+      ],
+      "classes": [
+        "class_11",
+        "class_12",
+        "dropper"
+      ],
+      "subjects": [
+        {
+          "name": "physics",
+          "units": [
+            "Unit 1: PHYSICS AND MEASUREMENT",
+            "Unit 2: KINEMATICS",
+            "Unit 3: LAWS OF MOTION",
+            "Unit 4: WORK, ENERGY, AND POWER",
+            "Unit 5: ROTATIONAL MOTION",
+            "Unit 6: GRAVITATION",
+            "Unit 7: PROPERTIES OF SOLIDS AND LIQUIDS",
+            "Unit 8: THERMODYNAMICS",
+            "Unit 9: KINETIC THEORY OF GASES",
+            "Unit 10: OSCILLATIONS AND WAVES",
+            "Unit 11: ELECTROSTATICS",
+            "Unit 12: CURRENT ELECTRICITY",
+            "Unit 13: MAGNETIC EFFECTS OF CURRENT AND MAGNETISM",
+            "Unit 14: ELECTROMAGNETIC INDUCTION AND ALTERNATING CURRENTS",
+            "Unit 15: ELECTROMAGNETIC WAVES",
+            "Unit 16: OPTICS",
+            "Unit 17: DUAL NATURE OF MATTER AND RADIATION",
+            "Unit 18: ATOMS AND NUCLEI",
+            "Unit 19: ELECTRONIC DEVICES",
+            "Unit 20: EXPERIMENTAL SKILLS"
+          ]
+        },
+        {
+          "name": "chemistry",
+          "units": [
+            "Unit I: SOME BASIC CONCEPTS IN CHEMISTRY",
+            "Unit 2: ATOMIC STRUCTURE",
+            "Unit 3: CHEMICAL BONDING AND MOLECULAR STRUCTURE",
+            "Unit 4: CHEMICAL THERMODYNAMICS",
+            "Unit 5: SOLUTIONS",
+            "Unit 6: EQUILIBRIUM",
+            "Unit 7: REDOX REACTIONS AND ELECTROCHEMISTRY",
+            "Unit 8: CHEMICAL KINETICS",
+            "Unit 9: CLASSIFICATION OF ELEMENTS AND PERIODICITY IN PROPERTIES",
+            "Unit 10: P- BLOCK ELEMENTS",
+            "Unit 11: d - and f- BLOCK ELEMENTS",
+            "Unit 12: CO-ORDINATION COMPOUNDS",
+            "Unit 13: PURIFICATION AND CHARACTERISATION OF ORGANIC COMPOUNDS",
+            "Unit 14: SOME BASIC PRINCIPLES OF ORGANIC CHEMISTRY",
+            "Unit 15: HYDROCARBONS",
+            "Unit 16: ORGANIC COMPOUNDS CONTAINING HALOGENS",
+            "Unit 17: ORGANIC COMPOUNDS CONTAINING OXYGEN",
+            "Unit 18: ORGANIC COMPOUNDS CONTAINING NITROGEN",
+            "Unit 19: BIOMOLECULES",
+            "Unit 20: PRINCIPLES RELATED TO PRACTICAL CHEMISTRY"
+          ]
+        },
+        {
+          "name": "biology",
+          "units": [
+            "Unit 1: Diversity in Living World",
+            "Unit 2: Structural Organisation in Animals and Plants",
+            "Unit 3: Cell Structure and Function",
+            "Unit 4: Plant Physiology",
+            "Unit 5: Human Physiology",
+            "Unit 6: Reproduction",
+            "Unit 7: Genetics and Evolution",
+            "Unit 8: Biology and Human Welfare",
+            "Unit 9: Biotechnology and Its Applications",
+            "Unit 10: Ecology and Environment"
+          ]
+        }
+      ]
+    }
+  ]
+}
