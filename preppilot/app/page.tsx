@@ -1,11 +1,23 @@
 import Link from "next/link";
 import { auth } from "@clerk/nextjs/server";
 import { Button } from "@/components/ui/button";
+import { isClerkConfigured } from "@/lib/auth/clerk";
 import { Brain, Compass, ShieldOff } from "lucide-react";
 
+export const dynamic = "force-dynamic";
+
 export default async function HomePage() {
-  const { userId } = await auth();
-  const signedIn = !!userId;
+  const clerkConfigured = isClerkConfigured();
+  let signedIn = false;
+
+  if (clerkConfigured) {
+    try {
+      const { userId } = await auth();
+      signedIn = !!userId;
+    } catch {
+      // Keep homepage available even if auth backend is unavailable.
+    }
+  }
   return (
     <main className="flex-1 flex flex-col">
       <header className="px-6 py-4 flex items-center justify-between border-b">
