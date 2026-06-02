@@ -45,6 +45,8 @@ describe("buildSystemPrompt", () => {
     expect(s).toContain("NEVER provide solved final answers");
     expect(s).toContain("Allowed: conceptual explanation");
     expect(s).toContain("DIAGNOSTIC QUESTION POLICY");
+    expect(s).toContain("LISTEN-FIRST PROTOCOL");
+    expect(s).toContain("PROFESSOR MODE");
     expect(s).toContain("Quick Diagnosis");
     expect(s).toContain("SYLLABUS KNOWLEDGE BASE");
     expect(s).toContain("iCall");

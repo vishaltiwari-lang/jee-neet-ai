@@ -39,63 +39,81 @@ function lastUserText(messages: UIMessage[]): string {
 }
 
 export async function POST(req: Request) {
-  const { userId } = await auth();
-  if (!userId) return new NextResponse("Unauthorized", { status: 401 });
+  try {
+    const { userId } = await auth();
+    if (!userId) return new NextResponse("Unauthorized", { status: 401 });
 
-  const rl = await checkChatLimits(userId);
-  if (!rl.ok) {
-    return NextResponse.json(
-      { error: "rate_limited", retry_after_seconds: rl.retryAfterSeconds },
-      { status: 429 },
-    );
-  }
+    const rl = await checkChatLimits(userId);
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: "rate_limited", retry_after_seconds: rl.retryAfterSeconds },
+        { status: 429 },
+      );
+    }
 
-  const body = await req.json().catch(() => null);
-  const parsed = BodySchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json({ error: "invalid_input" }, { status: 400 });
-  }
+    const body = await req.json().catch(() => null);
+    const parsed = BodySchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: "invalid_input" }, { status: 400 });
+    }
 
-  const messages = parsed.data.messages as UIMessage[];
-  const text = lastUserText(messages);
-  if (!text.trim()) {
-    return NextResponse.json({ error: "empty_message" }, { status: 400 });
-  }
+    const messages = parsed.data.messages as UIMessage[];
+    const text = lastUserText(messages);
+    if (!text.trim()) {
+      return NextResponse.json({ error: "empty_message" }, { status: 400 });
+    }
 
-  const result = await orchestrate({
-    userId,
-    conversationId: parsed.data.conversation_id,
-    message: text,
-    uiHistory: messages.slice(0, -1),
-  });
+    const result = await orchestrate({
+      userId,
+      conversationId: parsed.data.conversation_id,
+      message: text,
+      uiHistory: messages.slice(0, -1),
+    });
 
-  if (result.kind === "no_profile") {
-    return NextResponse.json({ error: "onboarding_incomplete", conversation_id: result.conversationId }, { status: 412 });
-  }
+    if (result.kind === "no_profile") {
+      return NextResponse.json({ error: "onboarding_incomplete", conversation_id: result.conversationId }, { status: 412 });
+    }
 
-  if (result.kind === "deterministic") {
+    if (result.kind === "deterministic") {
+      const stream = createUIMessageStream({
+        execute: async ({ writer }) => {
+          const id = `msg-${Date.now()}`;
+          writer.write({ type: "text-start", id });
+          writer.write({ type: "text-delta", id, delta: result.text });
+          writer.write({ type: "text-end", id });
+        },
+      });
+      return createUIMessageStreamResponse({
+        stream,
+        headers: { "x-conversation-id": result.conversationId },
+      });
+    }
+
+    const streamResult = buildStreamText({
+      systemPrompt: result.systemPrompt,
+      modelMessages: result.modelMessages,
+      models: result.models,
+      onFinish: result.onFinish,
+    });
+
+    return streamResult.toUIMessageStreamResponse({
+      headers: { "x-conversation-id": result.conversationId },
+    });
+  } catch (error) {
+    console.error("chat route failed", error);
     const stream = createUIMessageStream({
       execute: async ({ writer }) => {
         const id = `msg-${Date.now()}`;
         writer.write({ type: "text-start", id });
-        writer.write({ type: "text-delta", id, delta: result.text });
+        writer.write({
+          type: "text-delta",
+          id,
+          delta:
+            "I hit a temporary processing issue, but your chat is safe. Please retry once. If this keeps happening, switch to a new message with the same context and I will continue from there.",
+        });
         writer.write({ type: "text-end", id });
       },
     });
-    return createUIMessageStreamResponse({
-      stream,
-      headers: { "x-conversation-id": result.conversationId },
-    });
+    return createUIMessageStreamResponse({ stream });
   }
-
-  const streamResult = buildStreamText({
-    systemPrompt: result.systemPrompt,
-    modelMessages: result.modelMessages,
-    model: result.model,
-    onFinish: result.onFinish,
-  });
-
-  return streamResult.toUIMessageStreamResponse({
-    headers: { "x-conversation-id": result.conversationId },
-  });
 }

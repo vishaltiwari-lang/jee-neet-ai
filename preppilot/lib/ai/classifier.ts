@@ -1,7 +1,7 @@
 import { generateText } from "ai";
 import { buildClassifierPrompt } from "./prompts";
 import { stripInjectionPreamble } from "./safety";
-import { openaiModel } from "./provider";
+import { getClassifierModel, openaiModel } from "./provider";
 import type { IntentLabel } from "@/lib/db/schema";
 
 const VALID_LABELS: readonly IntentLabel[] = [
@@ -23,7 +23,7 @@ function normalize(s: string): IntentLabel | null {
 
 export async function classifyIntent(message: string): Promise<IntentLabel> {
   const safe = stripInjectionPreamble(message);
-  const model = process.env.OPENAI_CLASSIFIER_MODEL ?? "gpt-4o-mini";
+  const model = getClassifierModel();
   try {
     const result = await generateText({
       model: openaiModel(model),

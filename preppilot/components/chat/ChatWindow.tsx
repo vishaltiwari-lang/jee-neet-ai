@@ -1,6 +1,5 @@
 "use client";
 import * as React from "react";
-import { useRouter } from "next/navigation";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import { Button } from "@/components/ui/button";
@@ -16,6 +15,8 @@ type Props = {
   flagged: boolean;
 };
 
+const CHAT_CACHE_KEY = "preppilot.chat.last-session.v1";
+
 function messageText(m: UIMessage): string {
   return m.parts
     .filter((p) => (p as { type?: string }).type === "text")
@@ -23,18 +24,56 @@ function messageText(m: UIMessage): string {
     .join("");
 }
 
+function sanitizeForStorage(messages: UIMessage[]): UIMessage[] {
+  return messages.map((m) => ({
+    id: m.id,
+    role: m.role,
+    parts: m.parts.filter((p) => (p as { type?: string }).type === "text"),
+  }));
+}
+
+function readCachedSession():
+  | {
+      conversationId: string | null;
+      messages: UIMessage[];
+    }
+  | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(CHAT_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as {
+      conversationId?: string | null;
+      messages?: UIMessage[];
+    };
+    if (!Array.isArray(parsed.messages)) return null;
+    return {
+      conversationId: typeof parsed.conversationId === "string" ? parsed.conversationId : null,
+      messages: parsed.messages,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export default function ChatWindow({ profileClass, initialConversationId, initialMessages, flagged }: Props) {
-  const router = useRouter();
   const [conversationId, setConversationId] = React.useState<string | null>(initialConversationId);
+  const conversationIdRef = React.useRef<string | null>(initialConversationId);
   const [input, setInput] = React.useState("");
   const [suggested, setSuggested] = React.useState<string[]>([]);
   const [showAll, setShowAll] = React.useState(false);
   const taRef = React.useRef<HTMLTextAreaElement>(null);
   const scrollRef = React.useRef<HTMLDivElement>(null);
+  const hydratedFromCacheRef = React.useRef(false);
+  const creatingConversationRef = React.useRef<Promise<string | null> | null>(null);
 
   React.useEffect(() => {
     setSuggested(getRandomPrompts(profileClass, 4));
   }, [profileClass]);
+
+  React.useEffect(() => {
+    conversationIdRef.current = conversationId;
+  }, [conversationId]);
 
   const transport = React.useMemo(
     () =>
@@ -44,16 +83,16 @@ export default function ChatWindow({ profileClass, initialConversationId, initia
           return {
             body: {
               id,
-              conversation_id: conversationId ?? undefined,
+              conversation_id: conversationIdRef.current ?? undefined,
               messages,
             },
           };
         },
       }),
-    [conversationId],
+    [],
   );
 
-  const { messages, sendMessage, status, error, regenerate } = useChat({
+  const { messages, sendMessage, status, error, regenerate, setMessages } = useChat({
     messages: initialMessages,
     transport,
     onFinish: () => {
@@ -67,27 +106,76 @@ export default function ChatWindow({ profileClass, initialConversationId, initia
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
 
-  // After a fresh chat, if our state has no conversationId but server created one,
-  // we need to navigate. We sniff the response header through the transport on next send,
-  // but here we just check the URL on mount + after send completes.
   React.useEffect(() => {
-    if (!conversationId && status === "ready" && messages.length >= 2 && initialConversationId === null) {
-      // We don't have a clean way to read the response header from useChat in v6 without a custom transport;
-      // refresh router so server fetches the new conversation id via sidebar.
-      router.refresh();
-    }
-  }, [status, messages.length, conversationId, initialConversationId, router]);
+    if (hydratedFromCacheRef.current) return;
+    hydratedFromCacheRef.current = true;
+    if (initialConversationId || initialMessages.length > 0) return;
 
-  const send = (text: string) => {
+    const cached = readCachedSession();
+    if (!cached) return;
+    if (cached.messages.length > 0) {
+      setMessages(cached.messages);
+    }
+    if (!conversationIdRef.current && cached.conversationId) {
+      conversationIdRef.current = cached.conversationId;
+      setConversationId(cached.conversationId);
+    }
+  }, [initialConversationId, initialMessages.length, setMessages]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const payload = {
+      conversationId,
+      messages: sanitizeForStorage(messages).slice(-120),
+      updatedAt: Date.now(),
+    };
+    try {
+      window.localStorage.setItem(CHAT_CACHE_KEY, JSON.stringify(payload));
+    } catch {
+      // Ignore storage failures (private mode / quota).
+    }
+  }, [conversationId, messages]);
+
+  const ensureConversationId = React.useCallback(async (seedText: string): Promise<string | null> => {
+    if (conversationIdRef.current) return conversationIdRef.current;
+
+    if (!creatingConversationRef.current) {
+      creatingConversationRef.current = (async () => {
+        try {
+          const res = await fetch("/api/conversations", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ title: seedText.slice(0, 80) }),
+          });
+          if (!res.ok) return null;
+          const payload = (await res.json().catch(() => null)) as { conversation?: { id?: string } } | null;
+          const id = payload?.conversation?.id;
+          if (typeof id === "string" && id.length > 0) {
+            conversationIdRef.current = id;
+            setConversationId(id);
+            return id;
+          }
+          return null;
+        } finally {
+          creatingConversationRef.current = null;
+        }
+      })();
+    }
+
+    return creatingConversationRef.current;
+  }, []);
+
+  const send = async (text: string) => {
     const v = text.trim();
     if (!v) return;
     setInput("");
+    await ensureConversationId(v);
     sendMessage({ text: v });
   };
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    send(input);
+    void send(input);
   };
 
   const isStreaming = status === "submitted" || status === "streaming";
@@ -145,7 +233,9 @@ export default function ChatWindow({ profileClass, initialConversationId, initia
 
           {error && (
             <div className="text-sm text-destructive flex items-center gap-2">
-              Something went wrong.
+              {error.message?.includes("429")
+                ? "You are sending messages too quickly. Please wait a bit and retry."
+                : "Temporary issue while processing this reply. Your chat is saved in this browser."}
               <button onClick={() => regenerate()} className="underline inline-flex items-center gap-1">
                 <RefreshCcw className="h-3 w-3" /> Retry
               </button>
@@ -163,7 +253,7 @@ export default function ChatWindow({ profileClass, initialConversationId, initia
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                send(input);
+                void send(input);
               }
             }}
             placeholder="Ask for a plan, strategy, or how to bounce back from a bad mock…"

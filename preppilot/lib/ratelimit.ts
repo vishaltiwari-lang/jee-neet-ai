@@ -26,7 +26,7 @@ function buildLimiter(prefix: string, limit: number, window: `${number} ${"s" | 
 }
 
 const dailyChat = buildLimiter("chat-day", 50, "1 d");
-const burstChat = buildLimiter("chat-burst", 5, "1 m");
+const burstChat = buildLimiter("chat-burst", 20, "1 m");
 const onboardingLimit = buildLimiter("onboarding", 5, "1 h");
 const ipLimit = buildLimiter("ip", 200, "1 m");
 

@@ -1,6 +1,6 @@
 import { generateText } from "ai";
 import { buildSummaryPrompt } from "./prompts";
-import { openaiModel } from "./provider";
+import { getClassifierModel, openaiModel } from "./provider";
 import { db, messages } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { updateRollingSummary } from "@/lib/services/conversations";
@@ -15,7 +15,7 @@ export async function regenerateSummary(conversationId: string): Promise<string 
   const text = rows
     .map((m) => `${m.role.toUpperCase()}: ${m.content.slice(0, 1000)}`)
     .join("\n\n");
-  const model = process.env.OPENAI_CLASSIFIER_MODEL ?? "gpt-4o-mini";
+  const model = getClassifierModel();
   try {
     const result = await generateText({
       model: openaiModel(model),

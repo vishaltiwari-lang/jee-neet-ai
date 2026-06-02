@@ -4,7 +4,7 @@ import { classifyIntent } from "./classifier";
 import { validateOutput } from "./guardrails";
 import { detectSelfHarm } from "./safety";
 import { REFUSAL_MESSAGE, OUT_OF_SCOPE_MESSAGE, HELPLINE_MESSAGE, FALLBACK_MESSAGE } from "./refusal";
-import { openaiModel } from "./provider";
+import { getChatModelChain, openaiModel } from "./provider";
 import {
   assessSyllabusCoverage,
   buildOutOfSyllabusMessage,
@@ -42,8 +42,12 @@ export type OrchestratorResult =
       conversationId: string;
       systemPrompt: string;
       modelMessages: Awaited<ReturnType<typeof convertToModelMessages>>;
-      model: string;
-      onFinish: (text: string, usage?: { inputTokens?: number; outputTokens?: number }) => Promise<void>;
+      models: string[];
+      onFinish: (
+        text: string,
+        usage?: { inputTokens?: number; outputTokens?: number },
+        usedModel?: string,
+      ) => Promise<void>;
     }
   | {
       kind: "no_profile";
@@ -174,10 +178,15 @@ export async function orchestrate(input: OrchestratorInput): Promise<Orchestrato
   ];
 
   const modelMessages = await convertToModelMessages(finalUiHistory);
-  const model = process.env.OPENAI_CHAT_MODEL ?? "gpt-4o-mini";
+  const modelChain = getChatModelChain();
 
   const orchConversationId = conversationId;
-  const onFinish = async (text: string, usage?: { inputTokens?: number; outputTokens?: number }) => {
+  const onFinish = async (
+    text: string,
+    usage?: { inputTokens?: number; outputTokens?: number },
+    usedModel?: string,
+  ) => {
+    const selectedModel = usedModel || modelChain[0];
     const guard = validateOutput(text);
     let finalText = text;
     let refused = false;
@@ -201,7 +210,7 @@ export async function orchestrate(input: OrchestratorInput): Promise<Orchestrato
       intentLabel: label,
       tokensIn,
       tokensOut,
-      model,
+      model: selectedModel,
       refused,
     });
 
@@ -210,7 +219,7 @@ export async function orchestrate(input: OrchestratorInput): Promise<Orchestrato
       route: "/api/chat",
       tokensIn,
       tokensOut,
-      costUsd: calculateCost(model, tokensIn, tokensOut),
+      costUsd: calculateCost(selectedModel, tokensIn, tokensOut),
     });
 
     const total = await countMessages(orchConversationId);
@@ -229,7 +238,7 @@ export async function orchestrate(input: OrchestratorInput): Promise<Orchestrato
     conversationId,
     systemPrompt: fullSystem,
     modelMessages,
-    model,
+    models: modelChain,
     onFinish,
   };
 }
@@ -237,25 +246,41 @@ export async function orchestrate(input: OrchestratorInput): Promise<Orchestrato
 export function buildStreamText(args: {
   systemPrompt: string;
   modelMessages: Awaited<ReturnType<typeof convertToModelMessages>>;
-  model: string;
-  onFinish: (text: string, usage?: { inputTokens?: number; outputTokens?: number }) => Promise<void>;
+  models: string[];
+  onFinish: (
+    text: string,
+    usage?: { inputTokens?: number; outputTokens?: number },
+    usedModel?: string,
+  ) => Promise<void>;
 }) {
-  return streamText({
-    model: openaiModel(args.model),
-    system: args.systemPrompt,
-    messages: args.modelMessages,
-    temperature: 0.6,
-    maxOutputTokens: 1500,
-    onFinish: async (event) => {
-      try {
-        const text = (event as { text?: string }).text ?? "";
-        const usage = (event as { usage?: { inputTokens?: number; outputTokens?: number } }).usage;
-        await args.onFinish(text, usage);
-      } catch (err) {
-        console.error("onFinish error", err);
-      }
-    },
-  });
+  let lastError: unknown = null;
+  const chain = args.models.length > 0 ? args.models : ["anthropic/claude-sonnet-4.5"];
+
+  for (const modelName of chain) {
+    try {
+      return streamText({
+        model: openaiModel(modelName),
+        system: args.systemPrompt,
+        messages: args.modelMessages,
+        temperature: 0.6,
+        maxOutputTokens: 1500,
+        onFinish: async (event) => {
+          try {
+            const text = (event as { text?: string }).text ?? "";
+            const usage = (event as { usage?: { inputTokens?: number; outputTokens?: number } }).usage;
+            await args.onFinish(text, usage, modelName);
+          } catch (err) {
+            console.error("onFinish error", err);
+          }
+        },
+      });
+    } catch (err) {
+      lastError = err;
+      console.error(`streamText failed for model ${modelName}`, err);
+    }
+  }
+
+  throw lastError ?? new Error("No chat model available");
 }
 
 export { FALLBACK_MESSAGE };
