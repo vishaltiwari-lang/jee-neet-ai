@@ -1,5 +1,6 @@
 "use client";
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import { Button } from "@/components/ui/button";
@@ -64,6 +65,7 @@ export default function ChatWindow({
   flagged,
   freshSessionToken = null,
 }: Props) {
+  const router = useRouter();
   const [conversationId, setConversationId] = React.useState<string | null>(initialConversationId);
   const conversationIdRef = React.useRef<string | null>(initialConversationId);
   const [input, setInput] = React.useState("");
@@ -74,6 +76,7 @@ export default function ChatWindow({
   const hydratedFromCacheRef = React.useRef(false);
   const creatingConversationRef = React.useRef<Promise<string | null> | null>(null);
   const lastHandledFreshTokenRef = React.useRef<string | null>(null);
+  const sidebarSyncedConversationRef = React.useRef<string | null>(initialConversationId);
 
   React.useEffect(() => {
     setSuggested(getRandomPrompts(profileClass, 4));
@@ -121,10 +124,19 @@ export default function ChatWindow({
     }
   }, [freshSessionToken, setMessages]);
 
-  // Auto-scroll to bottom on new messages
+  // Smooth scroll only when message count changes to avoid jitter.
   React.useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages]);
+  }, [messages.length]);
+
+  // During token streaming, keep following output with instant scroll.
+  React.useEffect(() => {
+    if (status !== "streaming") return;
+    const id = window.setInterval(() => {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "auto" });
+    }, 120);
+    return () => window.clearInterval(id);
+  }, [status]);
 
   React.useEffect(() => {
     if (hydratedFromCacheRef.current) return;
@@ -156,6 +168,13 @@ export default function ChatWindow({
       // Ignore storage failures (private mode / quota).
     }
   }, [conversationId, messages]);
+
+  React.useEffect(() => {
+    if (!conversationId) return;
+    if (sidebarSyncedConversationRef.current === conversationId) return;
+    sidebarSyncedConversationRef.current = conversationId;
+    router.refresh();
+  }, [conversationId, router]);
 
   const ensureConversationId = React.useCallback(async (seedText: string): Promise<string | null> => {
     if (conversationIdRef.current) return conversationIdRef.current;
