@@ -2,10 +2,11 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { auth } from "@clerk/nextjs/server";
 import { UserButton } from "@clerk/nextjs";
-import { Compass, MessageSquarePlus, Bookmark, User } from "lucide-react";
+import { Compass, Bookmark, User } from "lucide-react";
 import { getProfile } from "@/lib/services/profile";
 import { listConversations } from "@/lib/services/conversations";
 import ConversationsList from "@/components/chat/ConversationsList";
+import NewChatButton from "@/components/chat/NewChatButton";
 
 export default async function ChatLayout({ children }: { children: React.ReactNode }) {
   const { userId } = await auth();
@@ -25,9 +26,7 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
           </Link>
         </div>
         <div className="p-3 border-b">
-          <Link href="/chat" className="w-full inline-flex items-center justify-center gap-2 rounded-md bg-primary text-primary-foreground px-3 py-2 text-sm font-medium hover:bg-primary/90">
-            <MessageSquarePlus className="h-4 w-4" /> New chat
-          </Link>
+          <NewChatButton />
         </div>
         <div className="flex-1 overflow-y-auto p-2">
           <ConversationsList items={conversations.map(c => ({ id: c.id, title: c.title, updatedAt: c.updatedAt.toISOString() }))} />
