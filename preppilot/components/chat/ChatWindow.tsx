@@ -13,7 +13,7 @@ type Props = {
   initialConversationId: string | null;
   initialMessages: UIMessage[];
   flagged: boolean;
-  forceFreshSession?: boolean;
+  freshSessionToken?: string | null;
 };
 
 const CHAT_CACHE_KEY = "preppilot.chat.last-session.v1";
@@ -62,7 +62,7 @@ export default function ChatWindow({
   initialConversationId,
   initialMessages,
   flagged,
-  forceFreshSession = false,
+  freshSessionToken = null,
 }: Props) {
   const [conversationId, setConversationId] = React.useState<string | null>(initialConversationId);
   const conversationIdRef = React.useRef<string | null>(initialConversationId);
@@ -73,7 +73,7 @@ export default function ChatWindow({
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const hydratedFromCacheRef = React.useRef(false);
   const creatingConversationRef = React.useRef<Promise<string | null> | null>(null);
-  const resetRef = React.useRef(false);
+  const lastHandledFreshTokenRef = React.useRef<string | null>(null);
 
   React.useEffect(() => {
     setSuggested(getRandomPrompts(profileClass, 4));
@@ -110,15 +110,16 @@ export default function ChatWindow({
   });
 
   React.useEffect(() => {
-    if (!forceFreshSession || resetRef.current) return;
-    resetRef.current = true;
+    if (!freshSessionToken) return;
+    if (lastHandledFreshTokenRef.current === freshSessionToken) return;
+    lastHandledFreshTokenRef.current = freshSessionToken;
     conversationIdRef.current = null;
     setConversationId(null);
     setMessages([]);
     if (typeof window !== "undefined") {
       window.localStorage.removeItem(CHAT_CACHE_KEY);
     }
-  }, [forceFreshSession, setMessages]);
+  }, [freshSessionToken, setMessages]);
 
   // Auto-scroll to bottom on new messages
   React.useEffect(() => {
@@ -128,7 +129,7 @@ export default function ChatWindow({
   React.useEffect(() => {
     if (hydratedFromCacheRef.current) return;
     hydratedFromCacheRef.current = true;
-    if (forceFreshSession) return;
+    if (freshSessionToken) return;
     if (initialConversationId || initialMessages.length > 0) return;
 
     const cached = readCachedSession();
@@ -140,7 +141,7 @@ export default function ChatWindow({
       conversationIdRef.current = cached.conversationId;
       setConversationId(cached.conversationId);
     }
-  }, [forceFreshSession, initialConversationId, initialMessages.length, setMessages]);
+  }, [freshSessionToken, initialConversationId, initialMessages.length, setMessages]);
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;

@@ -20,7 +20,7 @@ export default async function ChatHome({
       initialConversationId={null}
       initialMessages={[]}
       flagged={false}
-      forceFreshSession={Boolean(newChat)}
+      freshSessionToken={newChat ?? null}
     />
   );
 }
