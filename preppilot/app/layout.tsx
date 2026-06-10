@@ -11,9 +11,9 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "PrepPilot — AI study mentor for JEE & NEET",
+  title: "PrepPilot — Your Preparation Buddy for JEE & NEET",
   description:
-    "Your personalized AI study-strategy mentor for JEE and NEET. Get smart plans, revision strategies, and motivation — without doubt-solving.",
+    "PrepPilot is your AI preparation buddy for JEE and NEET. Get personalized study plans, revision schedules, and the motivation to stay consistent.",
 };
 
 export default function RootLayout({
