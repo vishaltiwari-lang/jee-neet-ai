@@ -2,12 +2,15 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useChat } from "@ai-sdk/react";
-import { type UIMessage } from "ai";
+import { DefaultChatTransport, type UIMessage } from "ai";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Send, AlertTriangle, Bookmark, RefreshCcw } from "lucide-react";
+import { AlertTriangle, Bookmark, Bot, Loader2, RefreshCcw, Send, Sparkles, Square, UserRound } from "lucide-react";
 import Markdown from "@/components/chat/Markdown";
-import { getRandomPrompts, type StudentClass } from "@/lib/constants/suggestedPrompts";
+import NewChatButton from "@/components/chat/NewChatButton";
+import { getPromptsForClass, type StudentClass } from "@/lib/constants/suggestedPrompts";
+import { CHAT_CACHE_KEY, CHAT_REQUEST_HISTORY_LIMIT, NEW_CHAT_EVENT } from "@/lib/constants/chat";
+import { cn } from "@/lib/utils";
 
 type Props = {
   profileClass: StudentClass;
@@ -16,8 +19,6 @@ type Props = {
   flagged: boolean;
   freshSessionToken?: string | null;
 };
-
-const CHAT_CACHE_KEY = "preppilot.chat.last-session.v1";
 
 function messageText(m: UIMessage): string {
   return m.parts
@@ -69,7 +70,7 @@ export default function ChatWindow({
   const [conversationId, setConversationId] = React.useState<string | null>(initialConversationId);
   const conversationIdRef = React.useRef<string | null>(initialConversationId);
   const [input, setInput] = React.useState("");
-  const suggested = React.useMemo(() => getRandomPrompts(profileClass, 4), [profileClass]);
+  const suggested = React.useMemo(() => getPromptsForClass(profileClass).slice(0, 4), [profileClass]);
   const [showAll, setShowAll] = React.useState(false);
   const taRef = React.useRef<HTMLTextAreaElement>(null);
   const scrollRef = React.useRef<HTMLDivElement>(null);
@@ -77,30 +78,76 @@ export default function ChatWindow({
   const creatingConversationRef = React.useRef<Promise<string | null> | null>(null);
   const lastHandledFreshTokenRef = React.useRef<string | null>(null);
   const sidebarSyncedConversationRef = React.useRef<string | null>(initialConversationId);
+  const chatSessionRef = React.useRef(0);
 
   React.useEffect(() => {
     conversationIdRef.current = conversationId;
   }, [conversationId]);
 
-  const { messages, sendMessage, status, error, regenerate, setMessages } = useChat({
+  const transport = React.useMemo(
+    () =>
+      new DefaultChatTransport({
+        api: "/api/chat",
+        prepareSendMessagesRequest({ messages, id, body, trigger, messageId }) {
+          return {
+            body: {
+              ...body,
+              id,
+              messages: sanitizeForStorage(messages).slice(-CHAT_REQUEST_HISTORY_LIMIT),
+              trigger,
+              messageId,
+            },
+          };
+        },
+      }),
+    [],
+  );
+
+  const { messages, sendMessage, status, error, regenerate, setMessages, stop } = useChat({
     messages: initialMessages,
+    transport,
     onFinish: () => {
       const last = document.querySelector<HTMLMetaElement>("meta[name='x-conversation-id']");
       void last;
     },
   });
 
-  React.useEffect(() => {
-    if (!freshSessionToken) return;
-    if (lastHandledFreshTokenRef.current === freshSessionToken) return;
-    lastHandledFreshTokenRef.current = freshSessionToken;
+  const resetChat = React.useCallback(() => {
+    chatSessionRef.current += 1;
+    void stop();
+    creatingConversationRef.current = null;
     conversationIdRef.current = null;
+    sidebarSyncedConversationRef.current = null;
+    hydratedFromCacheRef.current = true;
     setConversationId(null);
+    setInput("");
+    setShowAll(false);
     setMessages([]);
     if (typeof window !== "undefined") {
       window.localStorage.removeItem(CHAT_CACHE_KEY);
     }
-  }, [freshSessionToken, setMessages]);
+  }, [setMessages, stop]);
+
+  React.useEffect(() => {
+    if (!freshSessionToken) return;
+    if (lastHandledFreshTokenRef.current === freshSessionToken) return;
+    lastHandledFreshTokenRef.current = freshSessionToken;
+    resetChat();
+  }, [freshSessionToken, resetChat]);
+
+  React.useEffect(() => {
+    const onNewChat = () => resetChat();
+    window.addEventListener(NEW_CHAT_EVENT, onNewChat);
+    return () => window.removeEventListener(NEW_CHAT_EVENT, onNewChat);
+  }, [resetChat]);
+
+  React.useLayoutEffect(() => {
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = "0px";
+    const nextHeight = Math.min(el.scrollHeight, 160);
+    el.style.height = `${Math.max(nextHeight, 48)}px`;
+  }, [input]);
 
   // Smooth scroll only when message count changes to avoid jitter.
   React.useEffect(() => {
@@ -158,6 +205,7 @@ export default function ChatWindow({
     if (conversationIdRef.current) return conversationIdRef.current;
 
     if (!creatingConversationRef.current) {
+      const session = chatSessionRef.current;
       creatingConversationRef.current = (async () => {
         try {
           const res = await fetch("/api/conversations", {
@@ -168,6 +216,7 @@ export default function ChatWindow({
           if (!res.ok) return null;
           const payload = (await res.json().catch(() => null)) as { conversation?: { id?: string } } | null;
           const id = payload?.conversation?.id;
+          if (chatSessionRef.current !== session) return null;
           if (typeof id === "string" && id.length > 0) {
             conversationIdRef.current = id;
             setConversationId(id);
@@ -186,8 +235,10 @@ export default function ChatWindow({
   const send = async (text: string) => {
     const v = text.trim();
     if (!v) return;
+    const session = chatSessionRef.current;
     setInput("");
     await ensureConversationId(v);
+    if (chatSessionRef.current !== session) return;
     void sendMessage(
       { text: v },
       {
@@ -201,13 +252,36 @@ export default function ChatWindow({
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isStreaming) return;
     void send(input);
   };
 
   const isStreaming = status === "submitted" || status === "streaming";
+  const canSend = input.trim().length > 0 && !isStreaming;
+  const profileLabel = profileClass.replace("_", " ");
+
+  const pickPrompt = React.useCallback((prompt: string) => {
+    setInput(prompt);
+    window.requestAnimationFrame(() => taRef.current?.focus());
+  }, []);
 
   return (
-    <div className="flex flex-col min-h-0 h-full">
+    <div className="flex h-full min-h-0 flex-col bg-[#f6f7f8] dark:bg-background">
+      <div className="flex items-center justify-between gap-3 border-b border-black/10 bg-white/95 px-4 py-3 backdrop-blur md:px-8 dark:border-white/10 dark:bg-background/80">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="grid h-8 w-8 place-items-center rounded-md bg-[#151515] text-white">
+              <Sparkles className="h-4 w-4" />
+            </span>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold tracking-wide">PrepPilot</div>
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{profileLabel}</div>
+            </div>
+          </div>
+        </div>
+        <NewChatButton compact className="h-9 shrink-0 bg-[#151515] px-3 text-white hover:bg-[#242424]" />
+      </div>
+
       {flagged && (
         <div className="bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-900 px-4 py-3 text-sm flex items-start gap-2">
           <AlertTriangle className="h-4 w-4 mt-0.5 text-amber-700 dark:text-amber-400" />
@@ -217,33 +291,43 @@ export default function ChatWindow({
         </div>
       )}
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 md:px-8 py-6">
-        <div className="max-w-3xl mx-auto space-y-6">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-6 md:px-8 md:py-8">
+        <div className="mx-auto max-w-4xl space-y-6 pb-4">
           {messages.length === 0 && (
-            <div className="space-y-6">
-              <div>
-                <h1 className="text-2xl font-bold mb-2">What can I plan for you today?</h1>
-                <p className="text-sm text-muted-foreground">
-                  I&apos;m here to help with study plans, revision strategies, mock analysis, and motivation — not problem-solving.
-                </p>
+            <div className="mx-auto flex min-h-[54vh] max-w-3xl flex-col justify-center space-y-6">
+              <div className="space-y-3">
+                <div className="grid h-11 w-11 place-items-center rounded-md border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-card">
+                  <Sparkles className="h-5 w-5 text-[#151515] dark:text-white" />
+                </div>
+                <div>
+                  <h1 className="text-3xl font-semibold tracking-tight text-[#151515] md:text-4xl dark:text-white">
+                    Plan the next move.
+                  </h1>
+                  <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
+                    Pick a prompt or write your own.
+                  </p>
+                </div>
               </div>
-              <div className="space-y-2">
+              <div className="grid gap-2 md:grid-cols-2">
                 {suggested.map((q) => (
                   <button
                     key={q}
-                    onClick={() => setInput(q)}
-                    className="block w-full text-left px-4 py-3 rounded-md border bg-card hover:bg-accent text-sm transition-colors"
+                    onClick={() => pickPrompt(q)}
+                    className="group min-h-16 rounded-md border border-black/10 bg-white px-4 py-3 text-left text-sm leading-5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-black/20 hover:shadow-md dark:border-white/10 dark:bg-card dark:hover:border-white/20"
                   >
-                    {q}
+                    <span className="flex items-start justify-between gap-3">
+                      <span>{q}</span>
+                      <Send className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                    </span>
                   </button>
                 ))}
-                {!showAll && (
-                  <button onClick={() => setShowAll(true)} className="text-xs text-primary hover:underline">
-                    Show more prompts →
-                  </button>
-                )}
-                {showAll && <ShowAllPrompts profileClass={profileClass} excluded={suggested} onPick={(q) => setInput(q)} />}
               </div>
+              {!showAll && (
+                <button onClick={() => setShowAll(true)} className="w-fit text-xs font-medium text-[#151515] underline-offset-4 hover:underline dark:text-white">
+                  Show more prompts
+                </button>
+              )}
+              {showAll && <ShowAllPrompts profileClass={profileClass} excluded={suggested} onPick={pickPrompt} />}
             </div>
           )}
 
@@ -252,19 +336,24 @@ export default function ChatWindow({
           ))}
 
           {isStreaming && messages[messages.length - 1]?.role === "user" && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" /> Thinking…
+            <div className="flex items-center gap-3 text-sm text-muted-foreground">
+              <span className="grid h-8 w-8 place-items-center rounded-md bg-white shadow-sm dark:bg-card">
+                <Loader2 className="h-4 w-4 animate-spin" />
+              </span>
+              Thinking...
             </div>
           )}
 
           {error && (
-            <div className="text-sm text-destructive flex items-center gap-2">
-              {error.message?.includes("429")
-                ? "You are sending messages too quickly. Please wait a bit and retry."
-                : "Temporary issue while processing this reply. Your chat is saved in this browser."}
+            <div className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive flex items-center justify-between gap-3">
+              <span>
+                {error.message?.includes("429")
+                  ? "You are sending messages too quickly. Please wait a bit and retry."
+                  : "Temporary issue while processing this reply. Your chat is saved in this browser."}
+              </span>
               <button
                 onClick={() => regenerate({ body: { conversation_id: conversationIdRef.current ?? undefined } })}
-                className="underline inline-flex items-center gap-1"
+                className="shrink-0 underline inline-flex items-center gap-1"
               >
                 <RefreshCcw className="h-3 w-3" /> Retry
               </button>
@@ -273,26 +362,35 @@ export default function ChatWindow({
         </div>
       </div>
 
-      <form onSubmit={onSubmit} className="border-t bg-background px-4 md:px-8 py-4">
-        <div className="max-w-3xl mx-auto flex items-end gap-2">
-          <Textarea
-            ref={taRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void send(input);
-              }
-            }}
-            placeholder="Ask for a plan, strategy, or how to bounce back from a bad mock…"
-            rows={1}
-            className="resize-none min-h-[44px] max-h-40"
-            disabled={isStreaming}
-          />
-          <Button type="submit" size="icon" disabled={isStreaming || !input.trim()}>
-            {isStreaming ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          </Button>
+      <form onSubmit={onSubmit} className="border-t border-black/10 bg-white/90 px-3 py-3 backdrop-blur md:px-8 md:py-4 dark:border-white/10 dark:bg-background/80">
+        <div className="mx-auto max-w-4xl">
+          <div className="flex items-end gap-2 rounded-lg border border-black/10 bg-white px-3 py-2 shadow-[0_18px_50px_rgba(15,23,42,0.10)] transition-shadow focus-within:border-black/20 focus-within:shadow-[0_20px_60px_rgba(15,23,42,0.14)] dark:border-white/10 dark:bg-card">
+            <Textarea
+              ref={taRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  if (!isStreaming) void send(input);
+                }
+              }}
+              aria-label="Chat message"
+              placeholder="Ask PrepPilot..."
+              rows={1}
+              className="max-h-40 min-h-12 resize-none border-0 bg-transparent px-0 py-2 text-base leading-6 shadow-none placeholder:text-muted-foreground/70 focus-visible:ring-0 focus-visible:ring-offset-0 md:text-sm"
+            />
+            <Button
+              type={isStreaming ? "button" : "submit"}
+              size="icon"
+              aria-label={isStreaming ? "Stop response" : "Send message"}
+              disabled={!isStreaming && !canSend}
+              onClick={isStreaming ? () => void stop() : undefined}
+              className="h-11 w-11 shrink-0 bg-[#151515] text-white hover:bg-[#242424]"
+            >
+              {isStreaming ? <Square className="h-4 w-4 fill-current" /> : <Send className="h-4 w-4" />}
+            </Button>
+          </div>
         </div>
         <p className="text-[10px] text-muted-foreground text-center mt-2 max-w-3xl mx-auto">
           PrepPilot can be wrong. It won&apos;t solve numericals — that&apos;s by design.
@@ -331,44 +429,54 @@ function MessageBubble({ message, onSavePlan }: { message: UIMessage; onSavePlan
 
   if (message.role === "user") {
     return (
-      <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-2xl bg-primary text-primary-foreground px-4 py-2.5 whitespace-pre-wrap">
+      <div className="flex justify-end gap-3">
+        <div className="max-w-[86%] rounded-md bg-[#151515] px-4 py-3 text-sm leading-6 text-white shadow-sm whitespace-pre-wrap md:max-w-[72%]">
           {text}
         </div>
+        <span className="hidden h-8 w-8 shrink-0 place-items-center rounded-md bg-[#151515] text-white md:grid">
+          <UserRound className="h-4 w-4" />
+        </span>
       </div>
     );
   }
 
   return (
-    <div>
-      <div className={`rounded-2xl px-4 py-3 ${isRefusal ? "bg-muted/60 border border-amber-200 dark:border-amber-900" : "bg-card border"}`}>
-        <Markdown>{text}</Markdown>
-      </div>
-      {looksLikePlan && (
-        <div className="mt-2 flex justify-end">
-          <Button size="sm" variant="outline" onClick={onSavePlan}>
-            <Bookmark className="h-3.5 w-3.5" /> Save plan
-          </Button>
+    <div className="flex gap-3">
+      <span className="mt-1 hidden h-8 w-8 shrink-0 place-items-center rounded-md border border-black/10 bg-white text-[#151515] shadow-sm md:grid dark:border-white/10 dark:bg-card dark:text-white">
+        <Bot className="h-4 w-4" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div
+          className={cn(
+            "rounded-md border bg-white px-4 py-3 shadow-sm dark:bg-card",
+            isRefusal ? "border-amber-300/70 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30" : "border-black/10 dark:border-white/10",
+          )}
+        >
+          <Markdown>{text}</Markdown>
         </div>
-      )}
+        {looksLikePlan && (
+          <div className="mt-2 flex justify-end">
+            <Button size="sm" variant="outline" onClick={onSavePlan} className="bg-white dark:bg-card">
+              <Bookmark className="h-3.5 w-3.5" /> Save plan
+            </Button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
 function ShowAllPrompts({ profileClass, excluded, onPick }: { profileClass: StudentClass; excluded: string[]; onPick: (q: string) => void }) {
   const all = React.useMemo(() => {
-    // Import lazily; use the constants here.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const mod = require("@/lib/constants/suggestedPrompts") as typeof import("@/lib/constants/suggestedPrompts");
-    return mod.getPromptsForClass(profileClass).filter((q) => !excluded.includes(q));
+    return getPromptsForClass(profileClass).filter((q) => !excluded.includes(q));
   }, [profileClass, excluded]);
   return (
-    <div className="space-y-2 pt-2 border-t mt-2">
+    <div className="grid gap-2 border-t border-black/10 pt-4 md:grid-cols-2 dark:border-white/10">
       {all.map((q) => (
         <button
           key={q}
           onClick={() => onPick(q)}
-          className="block w-full text-left px-4 py-2 rounded-md text-sm hover:bg-accent"
+          className="rounded-md border border-black/10 bg-white px-4 py-3 text-left text-sm leading-5 shadow-sm transition-colors hover:border-black/20 dark:border-white/10 dark:bg-card dark:hover:border-white/20"
         >
           {q}
         </button>

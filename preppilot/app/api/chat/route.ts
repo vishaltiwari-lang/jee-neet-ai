@@ -4,10 +4,12 @@ import {
   createUIMessageStream,
   createUIMessageStreamResponse,
   type UIMessage,
+  type UIMessageChunk,
 } from "ai";
 import { z } from "zod";
-import { orchestrate, buildStreamText } from "@/lib/ai/orchestrator";
+import { orchestrate, buildStreamText, FALLBACK_MESSAGE } from "@/lib/ai/orchestrator";
 import { resolveSubmittedMessage } from "@/lib/ai/chat-request";
+import { CHAT_REQUEST_HISTORY_LIMIT } from "@/lib/constants/chat";
 import { checkChatLimits } from "@/lib/ratelimit";
 
 export const runtime = "nodejs";
@@ -28,6 +30,20 @@ const BodySchema = z.object({
     .default([]),
 });
 
+function fallbackMessageStream(text = FALLBACK_MESSAGE, persist?: () => Promise<void>) {
+  const stream = createUIMessageStream({
+    execute: async ({ writer }) => {
+      const id = `msg-${Date.now()}`;
+      writer.write({ type: "text-start", id });
+      writer.write({ type: "text-delta", id, delta: text });
+      writer.write({ type: "text-end", id });
+      await persist?.();
+    },
+  });
+
+  return createUIMessageStreamResponse({ stream });
+}
+
 export async function POST(req: Request) {
   try {
     const { userId } = await auth();
@@ -47,7 +63,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "invalid_input" }, { status: 400 });
     }
 
-    const messages = parsed.data.messages as UIMessage[];
+    const messages = (parsed.data.messages as UIMessage[]).slice(-CHAT_REQUEST_HISTORY_LIMIT);
     const { message: text, uiHistory } = resolveSubmittedMessage({
       messages,
       explicitMessage: parsed.data.message,
@@ -89,24 +105,71 @@ export async function POST(req: Request) {
       onFinish: result.onFinish,
     });
 
-    return streamResult.toUIMessageStreamResponse({
+    const stream = createUIMessageStream({
+      execute: async ({ writer }) => {
+        const providerStream = streamResult.toUIMessageStream({
+          onError: (error) => {
+            console.error("chat provider stream failed", error);
+            return FALLBACK_MESSAGE;
+          },
+        });
+        const reader = providerStream.getReader();
+        let activeTextId: string | null = null;
+        let textEnded = false;
+        let streamedText = "";
+
+        const writeFallback = async () => {
+          const fallbackText = streamedText
+            ? `${streamedText}\n\n${FALLBACK_MESSAGE}`
+            : FALLBACK_MESSAGE;
+
+          if (activeTextId && !textEnded) {
+            writer.write({ type: "text-delta", id: activeTextId, delta: `\n\n${FALLBACK_MESSAGE}` });
+            writer.write({ type: "text-end", id: activeTextId });
+          } else {
+            const id = `msg-${Date.now()}`;
+            writer.write({ type: "text-start", id });
+            writer.write({ type: "text-delta", id, delta: FALLBACK_MESSAGE });
+            writer.write({ type: "text-end", id });
+          }
+
+          await result.onFinish(fallbackText, { inputTokens: 0, outputTokens: 0 }, "fallback");
+        };
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            if (value.type === "error") {
+              await writeFallback();
+              return;
+            }
+
+            if (value.type === "text-start") {
+              activeTextId = value.id;
+              textEnded = false;
+            } else if (value.type === "text-delta") {
+              streamedText += value.delta;
+            } else if (value.type === "text-end" && value.id === activeTextId) {
+              textEnded = true;
+            }
+
+            writer.write(value as UIMessageChunk);
+          }
+        } catch (error) {
+          console.error("chat stream relay failed", error);
+          await writeFallback();
+        }
+      },
+    });
+
+    return createUIMessageStreamResponse({
+      stream,
       headers: { "x-conversation-id": result.conversationId },
     });
   } catch (error) {
     console.error("chat route failed", error);
-    const stream = createUIMessageStream({
-      execute: async ({ writer }) => {
-        const id = `msg-${Date.now()}`;
-        writer.write({ type: "text-start", id });
-        writer.write({
-          type: "text-delta",
-          id,
-          delta:
-            "I hit a temporary processing issue, but your chat is safe. Please retry once. If this keeps happening, switch to a new message with the same context and I will continue from there.",
-        });
-        writer.write({ type: "text-end", id });
-      },
-    });
-    return createUIMessageStreamResponse({ stream });
+    return fallbackMessageStream();
   }
 }

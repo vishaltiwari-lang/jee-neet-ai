@@ -67,6 +67,8 @@ export default function OnboardingForm() {
   React.useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
+      // Hydrate saved draft after mount to avoid server/client storage mismatch.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       if (raw) setForm({ ...initial, ...JSON.parse(raw) });
     } catch {}
   }, []);
