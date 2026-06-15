@@ -1,7 +1,12 @@
 import { db, studentProfiles, users } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import type { OnboardingInput, ProfileUpdateInput } from "@/lib/validation/schemas";
-import { withDbRetry } from "@/lib/db/retry";
+import { isRetryableDbError, withDbRetry } from "@/lib/db/retry";
+
+export type StudentProfile = typeof studentProfiles.$inferSelect;
+export type ProfileLookup =
+  | { status: "ok"; profile: StudentProfile | null }
+  | { status: "unavailable" };
 
 export async function ensureUserExists(userId: string, email?: string | null, name?: string | null) {
   await withDbRetry(async () => {
@@ -17,6 +22,18 @@ export async function getProfile(userId: string) {
     db.select().from(studentProfiles).where(eq(studentProfiles.userId, userId)).limit(1),
   );
   return rows[0] ?? null;
+}
+
+export async function getProfileLookup(userId: string): Promise<ProfileLookup> {
+  try {
+    return { status: "ok", profile: await getProfile(userId) };
+  } catch (error) {
+    if (isRetryableDbError(error)) {
+      console.error("profile lookup unavailable", error);
+      return { status: "unavailable" };
+    }
+    throw error;
+  }
 }
 
 export async function upsertProfile(userId: string, input: OnboardingInput) {

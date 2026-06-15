@@ -3,18 +3,30 @@ import Link from "next/link";
 import { auth } from "@clerk/nextjs/server";
 import { UserButton } from "@clerk/nextjs";
 import { Bookmark, Compass, User } from "lucide-react";
-import { getProfile } from "@/lib/services/profile";
+import { getProfileLookup } from "@/lib/services/profile";
 import { listConversations } from "@/lib/services/conversations";
+import { isRetryableDbError } from "@/lib/db/retry";
 import ConversationsList from "@/components/chat/ConversationsList";
 import NewChatButton from "@/components/chat/NewChatButton";
+import TemporaryServiceIssue from "@/components/TemporaryServiceIssue";
 
 export default async function ChatLayout({ children }: { children: React.ReactNode }) {
   const { userId } = await auth();
   if (!userId) redirect("/sign-in");
-  const profile = await getProfile(userId);
+  const profileLookup = await getProfileLookup(userId);
+  if (profileLookup.status === "unavailable") {
+    return <TemporaryServiceIssue retryHref="/chat" />;
+  }
+  const profile = profileLookup.profile;
   if (!profile?.onboardingComplete) redirect("/onboarding");
 
-  const conversations = await listConversations(userId, 50);
+  const conversations = await listConversations(userId, 50).catch((error) => {
+    if (isRetryableDbError(error)) {
+      console.error("conversation list unavailable", error);
+      return [];
+    }
+    throw error;
+  });
 
   return (
     <div className="flex-1 grid grid-cols-1 md:grid-cols-[304px_1fr] h-[calc(100vh-0px)] overflow-hidden bg-[#f6f7f8] text-foreground dark:bg-background">

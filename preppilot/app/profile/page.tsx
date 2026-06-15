@@ -1,14 +1,19 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { getProfile } from "@/lib/services/profile";
+import { getProfileLookup } from "@/lib/services/profile";
 import ProfileView from "@/components/profile/ProfileView";
+import TemporaryServiceIssue from "@/components/TemporaryServiceIssue";
 import { ArrowLeft, Compass } from "lucide-react";
 
 export default async function ProfilePage() {
   const { userId } = await auth();
   if (!userId) redirect("/sign-in");
-  const profile = await getProfile(userId);
+  const profileLookup = await getProfileLookup(userId);
+  if (profileLookup.status === "unavailable") {
+    return <TemporaryServiceIssue retryHref="/profile" />;
+  }
+  const profile = profileLookup.profile;
   if (!profile?.onboardingComplete) redirect("/onboarding");
   const user = await currentUser();
 

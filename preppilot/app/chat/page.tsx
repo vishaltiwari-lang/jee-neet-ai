@@ -1,7 +1,8 @@
 import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
-import { getProfile } from "@/lib/services/profile";
+import { getProfileLookup } from "@/lib/services/profile";
 import ChatWindow from "@/components/chat/ChatWindow";
+import TemporaryServiceIssue from "@/components/TemporaryServiceIssue";
 
 export default async function ChatHome({
   searchParams,
@@ -10,7 +11,11 @@ export default async function ChatHome({
 }) {
   const { userId } = await auth();
   if (!userId) redirect("/sign-in");
-  const profile = await getProfile(userId);
+  const profileLookup = await getProfileLookup(userId);
+  if (profileLookup.status === "unavailable") {
+    return <TemporaryServiceIssue retryHref="/chat" />;
+  }
+  const profile = profileLookup.profile;
   if (!profile?.onboardingComplete) redirect("/onboarding");
   const { new: newChat } = await searchParams;
 

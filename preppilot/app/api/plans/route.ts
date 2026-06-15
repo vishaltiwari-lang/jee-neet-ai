@@ -2,12 +2,25 @@ import { auth } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import { PlanCreateSchema } from "@/lib/validation/schemas";
 import { createPlan, listPlans } from "@/lib/services/plans";
+import { isRetryableDbError } from "@/lib/db/retry";
+
+function dbUnavailableResponse() {
+  return NextResponse.json(
+    { error: "database_unavailable", message: "Please retry in a moment." },
+    { status: 503 },
+  );
+}
 
 export async function GET() {
   const { userId } = await auth();
   if (!userId) return new NextResponse("Unauthorized", { status: 401 });
-  const plans = await listPlans(userId);
-  return NextResponse.json({ plans });
+  try {
+    const plans = await listPlans(userId);
+    return NextResponse.json({ plans });
+  } catch (error) {
+    if (isRetryableDbError(error)) return dbUnavailableResponse();
+    throw error;
+  }
 }
 
 export async function POST(req: Request) {
@@ -22,6 +35,7 @@ export async function POST(req: Request) {
     const plan = await createPlan(userId, parsed.data);
     return NextResponse.json({ plan });
   } catch (e) {
+    if (isRetryableDbError(e)) return dbUnavailableResponse();
     const msg = e instanceof Error ? e.message : "error";
     return NextResponse.json({ error: msg }, { status: 400 });
   }

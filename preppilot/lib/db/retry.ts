@@ -27,7 +27,7 @@ function getErrorMessage(error: unknown): string {
   return `${e.message ?? ""} ${e.sourceError?.message ?? ""}`.toLowerCase();
 }
 
-function isRetryable(error: unknown): boolean {
+export function isRetryableDbError(error: unknown): boolean {
   const code = getErrorCode(error);
   if (code && RETRYABLE_CODES.has(code)) return true;
   const message = getErrorMessage(error);
@@ -56,7 +56,7 @@ export async function withDbRetry<T>(
       return await operation();
     } catch (error) {
       lastError = error;
-      if (!isRetryable(error) || attempt === attempts) {
+      if (!isRetryableDbError(error) || attempt === attempts) {
         throw error;
       }
       await sleep(baseDelayMs * attempt);

@@ -2,17 +2,32 @@ import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { listPlans } from "@/lib/services/plans";
-import { getProfile } from "@/lib/services/profile";
+import { getProfileLookup } from "@/lib/services/profile";
+import { isRetryableDbError } from "@/lib/db/retry";
 import PlanCard from "@/components/plans/PlanCard";
+import TemporaryServiceIssue from "@/components/TemporaryServiceIssue";
 import { Compass, ArrowLeft } from "lucide-react";
 
 export default async function PlansPage() {
   const { userId } = await auth();
   if (!userId) redirect("/sign-in");
-  const profile = await getProfile(userId);
+  const profileLookup = await getProfileLookup(userId);
+  if (profileLookup.status === "unavailable") {
+    return <TemporaryServiceIssue retryHref="/plans" />;
+  }
+  const profile = profileLookup.profile;
   if (!profile?.onboardingComplete) redirect("/onboarding");
 
-  const plans = await listPlans(userId);
+  let plans: Awaited<ReturnType<typeof listPlans>>;
+  try {
+    plans = await listPlans(userId);
+  } catch (error) {
+    if (isRetryableDbError(error)) {
+      console.error("plans lookup unavailable", error);
+      return <TemporaryServiceIssue retryHref="/plans" />;
+    }
+    throw error;
+  }
 
   return (
     <div className="flex-1 px-4 md:px-8 py-8">
