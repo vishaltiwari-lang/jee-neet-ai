@@ -2,7 +2,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport, type UIMessage } from "ai";
+import { type UIMessage } from "ai";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2, Send, AlertTriangle, Bookmark, RefreshCcw } from "lucide-react";
@@ -69,7 +69,7 @@ export default function ChatWindow({
   const [conversationId, setConversationId] = React.useState<string | null>(initialConversationId);
   const conversationIdRef = React.useRef<string | null>(initialConversationId);
   const [input, setInput] = React.useState("");
-  const [suggested, setSuggested] = React.useState<string[]>([]);
+  const suggested = React.useMemo(() => getRandomPrompts(profileClass, 4), [profileClass]);
   const [showAll, setShowAll] = React.useState(false);
   const taRef = React.useRef<HTMLTextAreaElement>(null);
   const scrollRef = React.useRef<HTMLDivElement>(null);
@@ -79,33 +79,11 @@ export default function ChatWindow({
   const sidebarSyncedConversationRef = React.useRef<string | null>(initialConversationId);
 
   React.useEffect(() => {
-    setSuggested(getRandomPrompts(profileClass, 4));
-  }, [profileClass]);
-
-  React.useEffect(() => {
     conversationIdRef.current = conversationId;
   }, [conversationId]);
 
-  const transport = React.useMemo(
-    () =>
-      new DefaultChatTransport({
-        api: "/api/chat",
-        prepareSendMessagesRequest({ messages, id }) {
-          return {
-            body: {
-              id,
-              conversation_id: conversationIdRef.current ?? undefined,
-              messages,
-            },
-          };
-        },
-      }),
-    [],
-  );
-
   const { messages, sendMessage, status, error, regenerate, setMessages } = useChat({
     messages: initialMessages,
-    transport,
     onFinish: () => {
       const last = document.querySelector<HTMLMetaElement>("meta[name='x-conversation-id']");
       void last;
@@ -210,7 +188,15 @@ export default function ChatWindow({
     if (!v) return;
     setInput("");
     await ensureConversationId(v);
-    sendMessage({ text: v });
+    void sendMessage(
+      { text: v },
+      {
+        body: {
+          conversation_id: conversationIdRef.current ?? undefined,
+          message: v,
+        },
+      },
+    );
   };
 
   const onSubmit = (e: React.FormEvent) => {
@@ -276,7 +262,10 @@ export default function ChatWindow({
               {error.message?.includes("429")
                 ? "You are sending messages too quickly. Please wait a bit and retry."
                 : "Temporary issue while processing this reply. Your chat is saved in this browser."}
-              <button onClick={() => regenerate()} className="underline inline-flex items-center gap-1">
+              <button
+                onClick={() => regenerate({ body: { conversation_id: conversationIdRef.current ?? undefined } })}
+                className="underline inline-flex items-center gap-1"
+              >
                 <RefreshCcw className="h-3 w-3" /> Retry
               </button>
             </div>

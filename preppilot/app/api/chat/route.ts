@@ -7,6 +7,7 @@ import {
 } from "ai";
 import { z } from "zod";
 import { orchestrate, buildStreamText } from "@/lib/ai/orchestrator";
+import { resolveSubmittedMessage } from "@/lib/ai/chat-request";
 import { checkChatLimits } from "@/lib/ratelimit";
 
 export const runtime = "nodejs";
@@ -15,6 +16,7 @@ export const dynamic = "force-dynamic";
 const BodySchema = z.object({
   id: z.string().optional(),
   conversation_id: z.string().uuid().optional(),
+  message: z.string().min(1).max(4000).optional(),
   messages: z
     .array(
       z.object({
@@ -23,20 +25,8 @@ const BodySchema = z.object({
         parts: z.array(z.unknown()),
       }),
     )
-    .min(1),
+    .default([]),
 });
-
-function lastUserText(messages: UIMessage[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m.role !== "user") continue;
-    return m.parts
-      .filter((p) => (p as { type?: string }).type === "text")
-      .map((p) => (p as { text: string }).text)
-      .join("");
-  }
-  return "";
-}
 
 export async function POST(req: Request) {
   try {
@@ -58,7 +48,10 @@ export async function POST(req: Request) {
     }
 
     const messages = parsed.data.messages as UIMessage[];
-    const text = lastUserText(messages);
+    const { message: text, uiHistory } = resolveSubmittedMessage({
+      messages,
+      explicitMessage: parsed.data.message,
+    });
     if (!text.trim()) {
       return NextResponse.json({ error: "empty_message" }, { status: 400 });
     }
@@ -67,7 +60,7 @@ export async function POST(req: Request) {
       userId,
       conversationId: parsed.data.conversation_id,
       message: text,
-      uiHistory: messages.slice(0, -1),
+      uiHistory,
     });
 
     if (result.kind === "no_profile") {
