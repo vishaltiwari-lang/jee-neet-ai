@@ -2,6 +2,8 @@ import { generateText } from "ai";
 import { buildClassifierPrompt } from "./prompts";
 import { stripInjectionPreamble } from "./safety";
 import { getClassifierModel, openaiModel } from "./provider";
+import { classifyIntentHeuristic } from "./deterministic-mentor";
+import { aiProviderCircuitOpen, getAiProviderCircuitReason, noteAiProviderFailure } from "./provider-health";
 import type { IntentLabel } from "@/lib/db/schema";
 
 const VALID_LABELS: readonly IntentLabel[] = [
@@ -22,6 +24,14 @@ function normalize(s: string): IntentLabel | null {
 }
 
 export async function classifyIntent(message: string): Promise<IntentLabel> {
+  const heuristic = classifyIntentHeuristic(message);
+  if (heuristic) return heuristic;
+
+  if (aiProviderCircuitOpen()) {
+    console.warn("classifier skipped; AI provider circuit is open", getAiProviderCircuitReason());
+    return "strategy";
+  }
+
   const safe = stripInjectionPreamble(message);
   const model = getClassifierModel();
   try {
@@ -36,7 +46,7 @@ export async function classifyIntent(message: string): Promise<IntentLabel> {
     if (label) return label;
     return "strategy";
   } catch (err) {
-    console.error("classifyIntent error", err);
-    return "strategy";
+    console.error("classifyIntent error", noteAiProviderFailure(err));
+    return heuristic ?? "strategy";
   }
 }

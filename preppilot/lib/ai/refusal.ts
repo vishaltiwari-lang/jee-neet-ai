@@ -21,4 +21,6 @@ Email: icall@tiss.edu
 
 There are people trained to listen. Please reach out to them.`;
 
-export const FALLBACK_MESSAGE = `Hmm, I'm having a bit of trouble processing that. Can you rephrase, or tell me a bit more about what you're stuck on?`;
+export const FALLBACK_MESSAGE = `PrepPilot hit a temporary service issue, but your next safe step is still clear: focus on one study bottleneck, turn it into a small measurable task, and try again in a moment.
+
+If this was about planning, send your class, target exam, available hours, and weakest subject. If it was a question-solving request, I will not solve it, but I can help you build the approach and revision plan around it.`;

@@ -12,6 +12,8 @@
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
+    "health:openrouter": "tsx scripts/check-openrouter.ts",
+    "repair:fallbacks": "tsx scripts/repair-fallback-messages.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test"

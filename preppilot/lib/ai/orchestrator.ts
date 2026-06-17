@@ -1,10 +1,17 @@
-import { streamText, type UIMessage, convertToModelMessages } from "ai";
+import { generateText, stepCountIs, type UIMessage, convertToModelMessages } from "ai";
+import { searchPwBooks, pwBooksSearchAvailable } from "./tools/pw-books";
 import { buildSystemPrompt } from "./prompts";
 import { classifyIntent } from "./classifier";
 import { validateOutput } from "./guardrails";
 import { detectSelfHarm } from "./safety";
 import { REFUSAL_MESSAGE, OUT_OF_SCOPE_MESSAGE, HELPLINE_MESSAGE, FALLBACK_MESSAGE } from "./refusal";
 import { getChatModelChain, openaiModel } from "./provider";
+import { buildDeterministicMentorResponse } from "./deterministic-mentor";
+import {
+  aiProviderCircuitOpen,
+  getAiProviderCircuitReason,
+  noteAiProviderFailure,
+} from "./provider-health";
 import {
   assessSyllabusCoverage,
   buildOutOfSyllabusMessage,
@@ -43,11 +50,13 @@ export type OrchestratorResult =
       systemPrompt: string;
       modelMessages: Awaited<ReturnType<typeof convertToModelMessages>>;
       models: string[];
+      fallbackText: string;
+      fallbackLabel: IntentLabel;
       onFinish: (
         text: string,
         usage?: { inputTokens?: number; outputTokens?: number },
         usedModel?: string,
-      ) => Promise<void>;
+      ) => Promise<string>;
     }
   | {
       kind: "no_profile";
@@ -64,6 +73,17 @@ function uiMessagesToTexts(history: UIMessage[]): string {
       return `${m.role.toUpperCase()}: ${text}`;
     })
     .join("\n\n");
+}
+
+async function safeAppendMessage(
+  conversationId: string,
+  data: Parameters<typeof appendMessage>[1],
+): Promise<void> {
+  try {
+    await appendMessage(conversationId, data);
+  } catch (error) {
+    console.error("message persistence failed", error);
+  }
 }
 
 export async function orchestrate(input: OrchestratorInput): Promise<OrchestratorResult> {
@@ -89,7 +109,7 @@ export async function orchestrate(input: OrchestratorInput): Promise<Orchestrato
     return { kind: "no_profile", conversationId };
   }
 
-  await appendMessage(conversationId, { role: "user", content: message });
+  await safeAppendMessage(conversationId, { role: "user", content: message });
 
   const isSelfHarm = detectSelfHarm(message);
   if (isSelfHarm) {
@@ -104,7 +124,7 @@ export async function orchestrate(input: OrchestratorInput): Promise<Orchestrato
     const text = isSelfHarm
       ? `${HELPLINE_MESSAGE}\n\n---\n\n${syllabusResponse}`
       : syllabusResponse;
-    await appendMessage(conversationId, {
+    await safeAppendMessage(conversationId, {
       role: "assistant",
       content: text,
       intentLabel: "strategy",
@@ -117,7 +137,7 @@ export async function orchestrate(input: OrchestratorInput): Promise<Orchestrato
 
   if (intent === "academic_solve") {
     const text = isSelfHarm ? `${HELPLINE_MESSAGE}\n\n---\n\n${REFUSAL_MESSAGE}` : REFUSAL_MESSAGE;
-    await appendMessage(conversationId, {
+    await safeAppendMessage(conversationId, {
       role: "assistant",
       content: text,
       intentLabel: "academic_solve",
@@ -130,7 +150,7 @@ export async function orchestrate(input: OrchestratorInput): Promise<Orchestrato
 
   if (intent === "out_of_scope") {
     const text = isSelfHarm ? `${HELPLINE_MESSAGE}\n\n---\n\n${OUT_OF_SCOPE_MESSAGE}` : OUT_OF_SCOPE_MESSAGE;
-    await appendMessage(conversationId, {
+    await safeAppendMessage(conversationId, {
       role: "assistant",
       content: text,
       intentLabel: "out_of_scope",
@@ -149,7 +169,7 @@ export async function orchestrate(input: OrchestratorInput): Promise<Orchestrato
         class: profile.class,
         targetExam: profile.targetExam,
       });
-      await appendMessage(conversationId, {
+      await safeAppendMessage(conversationId, {
         role: "assistant",
         content: text,
         intentLabel: "out_of_scope",
@@ -179,13 +199,19 @@ export async function orchestrate(input: OrchestratorInput): Promise<Orchestrato
 
   const modelMessages = await convertToModelMessages(finalUiHistory);
   const modelChain = getChatModelChain();
+  const deterministicFallback = buildDeterministicMentorResponse({
+    message,
+    profile,
+    intent,
+    isSelfHarm,
+  });
 
   const orchConversationId = conversationId;
   const onFinish = async (
     text: string,
     usage?: { inputTokens?: number; outputTokens?: number },
     usedModel?: string,
-  ) => {
+  ): Promise<string> => {
     const selectedModel = usedModel || modelChain[0];
     const guard = validateOutput(text);
     let finalText = text;
@@ -204,7 +230,8 @@ export async function orchestrate(input: OrchestratorInput): Promise<Orchestrato
 
     const tokensIn = usage?.inputTokens ?? 0;
     const tokensOut = usage?.outputTokens ?? 0;
-    await appendMessage(orchConversationId, {
+
+    await safeAppendMessage(orchConversationId, {
       role: "assistant",
       content: finalText,
       intentLabel: label,
@@ -222,15 +249,21 @@ export async function orchestrate(input: OrchestratorInput): Promise<Orchestrato
       costUsd: calculateCost(selectedModel, tokensIn, tokensOut),
     });
 
-    const total = await countMessages(orchConversationId);
-    if (total > 0 && total % 20 === 0) {
-      regenerateSummary(orchConversationId).catch((e) => console.error("summary regen failed", e));
+    try {
+      const total = await countMessages(orchConversationId);
+      if (total > 0 && total % 20 === 0) {
+        regenerateSummary(orchConversationId).catch((e) => console.error("summary regen failed", e));
+      }
+
+      if (total === 2) {
+        // First exchange — set a nicer title
+        await updateConversationTitle(orchConversationId, message.slice(0, 60));
+      }
+    } catch (error) {
+      console.error("post-chat bookkeeping failed", error);
     }
 
-    if (total === 2) {
-      // First exchange — set a nicer title
-      await updateConversationTitle(orchConversationId, message.slice(0, 60));
-    }
+    return finalText;
   };
 
   return {
@@ -239,11 +272,13 @@ export async function orchestrate(input: OrchestratorInput): Promise<Orchestrato
     systemPrompt: fullSystem,
     modelMessages,
     models: modelChain,
+    fallbackText: deterministicFallback.text,
+    fallbackLabel: deterministicFallback.label,
     onFinish,
   };
 }
 
-export function buildStreamText(args: {
+export async function generateAssistantText(args: {
   systemPrompt: string;
   modelMessages: Awaited<ReturnType<typeof convertToModelMessages>>;
   models: string[];
@@ -251,32 +286,39 @@ export function buildStreamText(args: {
     text: string,
     usage?: { inputTokens?: number; outputTokens?: number },
     usedModel?: string,
-  ) => Promise<void>;
-}) {
+  ) => Promise<string>;
+}): Promise<{ text: string; usage?: { inputTokens?: number; outputTokens?: number }; model: string }> {
+  if (aiProviderCircuitOpen()) {
+    throw new Error(`AI provider circuit is open: ${getAiProviderCircuitReason()}`);
+  }
+
   let lastError: unknown = null;
-  const chain = args.models.length > 0 ? args.models : ["anthropic/claude-sonnet-4.5"];
+  const chain = args.models.length > 0 ? args.models : ["anthropic/claude-sonnet-4.6"];
+
+  // Expose the Physics Wallah book-search tool only when it's configured.
+  // This turns the chat model into an agent: it decides when to call the tool
+  // (restricted to book recommendations by the tool description + system
+  // prompt) and we loop up to `stepCountIs(N)` so it can read results and
+  // answer in the same turn.
+  const tools = pwBooksSearchAvailable() ? { searchPwBooks } : undefined;
 
   for (const modelName of chain) {
     try {
-      return streamText({
+      const result = await generateText({
         model: openaiModel(modelName),
         system: args.systemPrompt,
         messages: args.modelMessages,
         temperature: 0.6,
         maxOutputTokens: 1500,
-        onFinish: async (event) => {
-          try {
-            const text = (event as { text?: string }).text ?? "";
-            const usage = (event as { usage?: { inputTokens?: number; outputTokens?: number } }).usage;
-            await args.onFinish(text, usage, modelName);
-          } catch (err) {
-            console.error("onFinish error", err);
-          }
-        },
+        ...(tools ? { tools, stopWhen: stepCountIs(5) } : {}),
       });
+      const text = (result as { text?: string }).text ?? "";
+      const usage = (result as { usage?: { inputTokens?: number; outputTokens?: number } }).usage;
+      return { text, usage, model: modelName };
     } catch (err) {
       lastError = err;
-      console.error(`streamText failed for model ${modelName}`, err);
+      console.error(`generateText failed for model ${modelName}`, noteAiProviderFailure(err));
+      if (aiProviderCircuitOpen()) break;
     }
   }
 

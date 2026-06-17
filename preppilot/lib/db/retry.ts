@@ -12,19 +12,37 @@ const RETRYABLE_CODES = new Set([
 ]);
 
 function getErrorCode(error: unknown): string | undefined {
-  if (!(error instanceof Error)) return undefined;
-  const e = error as Error & {
-    code?: string;
-    cause?: { code?: string };
-    sourceError?: { code?: string; cause?: { code?: string } };
-  };
-  return e.code ?? e.cause?.code ?? e.sourceError?.code ?? e.sourceError?.cause?.code;
+  return flattenErrorChain(error).find((item) => item.code)?.code;
 }
 
 function getErrorMessage(error: unknown): string {
-  if (!(error instanceof Error)) return "";
-  const e = error as Error & { sourceError?: { message?: string } };
-  return `${e.message ?? ""} ${e.sourceError?.message ?? ""}`.toLowerCase();
+  return flattenErrorChain(error)
+    .map((item) => item.message ?? "")
+    .join(" ")
+    .toLowerCase();
+}
+
+function flattenErrorChain(error: unknown, seen = new Set<unknown>()): Array<{ code?: string; message?: string }> {
+  if (!error || seen.has(error)) return [];
+  seen.add(error);
+
+  if (!(error instanceof Error)) {
+    return [{ message: String(error) }];
+  }
+
+  const e = error as Error & {
+    code?: string;
+    cause?: unknown;
+    sourceError?: unknown;
+    errors?: unknown[];
+  };
+
+  return [
+    { code: e.code, message: e.message },
+    ...flattenErrorChain(e.cause, seen),
+    ...flattenErrorChain(e.sourceError, seen),
+    ...(Array.isArray(e.errors) ? e.errors.flatMap((item) => flattenErrorChain(item, seen)) : []),
+  ];
 }
 
 export function isRetryableDbError(error: unknown): boolean {
