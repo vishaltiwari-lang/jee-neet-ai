@@ -1,4 +1,4 @@
-import { generateText, stepCountIs, type UIMessage, convertToModelMessages } from "ai";
+import { streamText, stepCountIs, type UIMessage, convertToModelMessages } from "ai";
 import { searchPwBooks, pwBooksSearchAvailable } from "./tools/pw-books";
 import { buildSystemPrompt } from "./prompts";
 import { classifyIntent } from "./classifier";
@@ -278,22 +278,19 @@ export async function orchestrate(input: OrchestratorInput): Promise<Orchestrato
   };
 }
 
-export async function generateAssistantText(args: {
+function getChatTimeoutMs(): number {
+  const parsed = Number(process.env.OPENAI_CHAT_TIMEOUT_MS ?? 20_000);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 20_000;
+}
+
+export function streamAssistantText(args: {
   systemPrompt: string;
   modelMessages: Awaited<ReturnType<typeof convertToModelMessages>>;
-  models: string[];
-  onFinish: (
-    text: string,
-    usage?: { inputTokens?: number; outputTokens?: number },
-    usedModel?: string,
-  ) => Promise<string>;
-}): Promise<{ text: string; usage?: { inputTokens?: number; outputTokens?: number }; model: string }> {
+  model: string;
+}) {
   if (aiProviderCircuitOpen()) {
     throw new Error(`AI provider circuit is open: ${getAiProviderCircuitReason()}`);
   }
-
-  let lastError: unknown = null;
-  const chain = args.models.length > 0 ? args.models : ["anthropic/claude-sonnet-4.6"];
 
   // Expose the Physics Wallah book-search tool only when it's configured.
   // This turns the chat model into an agent: it decides when to call the tool
@@ -302,27 +299,21 @@ export async function generateAssistantText(args: {
   // answer in the same turn.
   const tools = pwBooksSearchAvailable() ? { searchPwBooks } : undefined;
 
-  for (const modelName of chain) {
-    try {
-      const result = await generateText({
-        model: openaiModel(modelName),
-        system: args.systemPrompt,
-        messages: args.modelMessages,
-        temperature: 0.6,
-        maxOutputTokens: 1500,
-        ...(tools ? { tools, stopWhen: stepCountIs(5) } : {}),
-      });
-      const text = (result as { text?: string }).text ?? "";
-      const usage = (result as { usage?: { inputTokens?: number; outputTokens?: number } }).usage;
-      return { text, usage, model: modelName };
-    } catch (err) {
-      lastError = err;
-      console.error(`generateText failed for model ${modelName}`, noteAiProviderFailure(err));
-      if (aiProviderCircuitOpen()) break;
-    }
+  try {
+    return streamText({
+      model: openaiModel(args.model),
+      system: args.systemPrompt,
+      messages: args.modelMessages,
+      temperature: 0.6,
+      maxOutputTokens: 1500,
+      maxRetries: 0,
+      timeout: getChatTimeoutMs(),
+      ...(tools ? { tools, stopWhen: stepCountIs(5) } : {}),
+    });
+  } catch (err) {
+    console.error(`streamText setup failed for model ${args.model}`, noteAiProviderFailure(err));
+    throw err;
   }
-
-  throw lastError ?? new Error("No chat model available");
 }
 
 export { FALLBACK_MESSAGE };
