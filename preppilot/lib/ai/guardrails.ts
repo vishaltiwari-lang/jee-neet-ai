@@ -22,9 +22,24 @@ const ACCEPTABLE_CONTEXT = [
   /plan|schedule|strategy|approach|revision|topic|chapter|week|mistake|mock|attempt/i,
 ];
 
+const RAW_TOOL_CALL_PATTERNS: RegExp[] = [
+  /<\s*\/?\s*tool_call\b/i,
+  /<\s*\/?\s*function_call\b/i,
+  /"name"\s*:\s*"searchPwBooks"/i,
+  /\bsearchPwBooks\b/i,
+];
+
 export type GuardrailResult = { ok: true } | { ok: false; reason: string };
 
+export function containsRawToolCall(text: string): boolean {
+  return RAW_TOOL_CALL_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 export function validateOutput(text: string): GuardrailResult {
+  if (containsRawToolCall(text)) {
+    return { ok: false, reason: "raw_tool_call" };
+  }
+
   for (const pattern of ANSWER_PATTERNS) {
     if (pattern.test(text)) {
       const ctxIsPlanning = ACCEPTABLE_CONTEXT.some((p) => p.test(text));

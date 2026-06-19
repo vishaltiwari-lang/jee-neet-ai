@@ -12,6 +12,7 @@ import { resolveSubmittedMessage } from "@/lib/ai/chat-request";
 import { CHAT_REQUEST_HISTORY_LIMIT } from "@/lib/constants/chat";
 import { checkChatLimits } from "@/lib/ratelimit";
 import { aiProviderCircuitOpen, noteAiProviderFailure, summarizeAiError } from "@/lib/ai/provider-health";
+import { containsRawToolCall } from "@/lib/ai/guardrails";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,6 +31,18 @@ const BodySchema = z.object({
     )
     .default([]),
 });
+
+const STREAM_GUARD_HOLD_CHARS = 240;
+
+class RawToolCallLeakError extends Error {
+  constructor() {
+    super("raw_tool_call_leak");
+  }
+}
+
+function isRawToolCallLeakError(error: unknown): boolean {
+  return error instanceof RawToolCallLeakError || (error instanceof Error && error.message === "raw_tool_call_leak");
+}
 
 function fallbackMessageStream(text = FALLBACK_MESSAGE, persist?: () => Promise<void>) {
   const stream = createUIMessageStream({
@@ -164,11 +177,17 @@ export async function POST(req: Request) {
                 activeTextId = chunk.id;
               } else if (chunk.type === "text-delta") {
                 streamedText += chunk.delta;
+                if (containsRawToolCall(streamedText)) {
+                  throw new RawToolCallLeakError();
+                }
               } else if (chunk.type === "text-end" && chunk.id === activeTextId) {
                 activeTextId = null;
               }
 
-              if (!flushed && !isVisibleStreamChunk(chunk)) {
+              const shouldHoldForGuard =
+                chunk.type === "text-delta" && streamedText.length < STREAM_GUARD_HOLD_CHARS;
+
+              if (!flushed && (!isVisibleStreamChunk(chunk) || shouldHoldForGuard)) {
                 bufferedChunks.push(chunk);
                 continue;
               }
@@ -180,6 +199,7 @@ export async function POST(req: Request) {
             if (!streamedText.trim()) {
               continue;
             }
+            flushBuffered();
 
             let usage: { inputTokens?: number; outputTokens?: number } | undefined;
             try {
@@ -191,6 +211,19 @@ export async function POST(req: Request) {
             deliveredProviderText = true;
             return;
           } catch (error) {
+            if (isRawToolCallLeakError(error)) {
+              console.error(`chat stream blocked raw tool-call output for model ${modelName}`);
+              const finalText = await result.onFinish(streamedText, undefined, `${modelName}:guarded`);
+              if (flushed && activeTextId) {
+                writer.write({ type: "text-delta", id: activeTextId, delta: `\n\n${finalText}` });
+                writer.write({ type: "text-end", id: activeTextId });
+              } else {
+                writeTextMessage(writer, finalText);
+              }
+              deliveredProviderText = true;
+              return;
+            }
+
             const summary = noteAiProviderFailure(error);
             console.error(`chat stream failed for model ${modelName}`, summary);
 

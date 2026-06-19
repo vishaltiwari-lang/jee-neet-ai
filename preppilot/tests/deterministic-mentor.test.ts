@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildBookRecommendationUnavailableResponse,
   buildDeterministicMentorResponse,
   classifyIntentHeuristic,
+  isBookRecommendationRequest,
 } from "@/lib/ai/deterministic-mentor";
 import { FALLBACK_MESSAGE } from "@/lib/ai/refusal";
 import type { StudentProfile } from "@/lib/services/profile";
@@ -43,6 +45,11 @@ describe("classifyIntentHeuristic", () => {
       ),
     ).toBe("strategy");
   });
+
+  it("detects book recommendation requests", () => {
+    expect(isBookRecommendationRequest("idk which book to follow for rotational motion")).toBe(true);
+    expect(isBookRecommendationRequest("recommend a physics module for JEE")).toBe(true);
+  });
 });
 
 describe("buildDeterministicMentorResponse", () => {
@@ -57,5 +64,15 @@ describe("buildDeterministicMentorResponse", () => {
     expect(result.text).toContain("Class 11");
     expect(result.text).not.toBe(FALLBACK_MESSAGE);
     expect(result.label).toBe("strategy");
+  });
+
+  it("returns a clean response when live PW book lookup is unavailable", () => {
+    const text = buildBookRecommendationUnavailableResponse(profile);
+
+    expect(text).toContain("cannot fetch live Physics Wallah publication listings");
+    expect(text).toContain("practice ladder");
+    expect(text).toContain("official PW store");
+    expect(text).not.toContain("<tool_call>");
+    expect(text).not.toContain("searchPwBooks");
   });
 });

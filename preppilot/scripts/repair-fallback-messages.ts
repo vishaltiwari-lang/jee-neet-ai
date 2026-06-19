@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { and, desc, eq, lt } from "drizzle-orm";
+import { and, desc, eq, ilike, lt, or } from "drizzle-orm";
 
 const OLD_FALLBACK =
   "Hmm, I'm having a bit of trouble processing that. Can you rephrase, or tell me a bit more about what you're stuck on?";
@@ -20,9 +20,12 @@ async function main() {
 
   const { db, conversations, messages, studentProfiles } = await import("../lib/db");
   const { withDbRetry } = await import("../lib/db/retry");
-  const { buildDeterministicMentorResponse, classifyIntentHeuristic } = await import(
-    "../lib/ai/deterministic-mentor"
-  );
+  const {
+    buildBookRecommendationUnavailableResponse,
+    buildDeterministicMentorResponse,
+    classifyIntentHeuristic,
+    isBookRecommendationRequest,
+  } = await import("../lib/ai/deterministic-mentor");
 
   const stale = await withDbRetry(() =>
     db
@@ -34,7 +37,16 @@ async function main() {
       })
       .from(messages)
       .innerJoin(conversations, eq(messages.conversationId, conversations.id))
-      .where(and(eq(messages.role, "assistant"), eq(messages.content, OLD_FALLBACK))),
+      .where(
+        and(
+          eq(messages.role, "assistant"),
+          or(
+            eq(messages.content, OLD_FALLBACK),
+            ilike(messages.content, "%<tool_call%"),
+            ilike(messages.content, "%searchPwBooks%"),
+          ),
+        ),
+      ),
   );
 
   for (const row of stale) {
@@ -58,11 +70,16 @@ async function main() {
     );
 
     const userText = previousUserMessage?.content ?? "";
-    const response = buildDeterministicMentorResponse({
-      message: userText,
-      profile,
-      intent: classifyIntentHeuristic(userText) ?? "strategy",
-    });
+    const response = isBookRecommendationRequest(userText)
+      ? {
+          text: buildBookRecommendationUnavailableResponse(profile),
+          label: "strategy" as const,
+        }
+      : buildDeterministicMentorResponse({
+          message: userText,
+          profile,
+          intent: classifyIntentHeuristic(userText) ?? "strategy",
+        });
 
     await withDbRetry(() =>
       db
@@ -78,7 +95,7 @@ async function main() {
     );
   }
 
-  console.log(`repaired_fallback_messages=${stale.length}`);
+  console.log(`repaired_problem_messages=${stale.length}`);
 }
 
 main().catch((error) => {

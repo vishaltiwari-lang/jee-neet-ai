@@ -24,6 +24,8 @@ const STRATEGY_PATTERN =
 const CLARIFICATION_PATTERN = /\b(what do you mean|explain again|clarify|more detail|can you elaborate)\b/i;
 const OUT_OF_SCOPE_PATTERN =
   /\b(recipe|movie|song|cricket|football|weather|stock|crypto|coding|programming|javascript|python|relationship|dating|travel|hotel)\b/i;
+const BOOK_RECOMMENDATION_PATTERN =
+  /\b(which|what|suggest|recommend|buy|purchase|follow|choose)\b.{0,60}\b(book|books|module|modules|material|resources?|publication|publications)\b|\b(book|books|module|modules|material|resources?|publication|publications)\b.{0,60}\b(which|what|suggest|recommend|buy|purchase|follow|choose)\b/i;
 
 const DIRECT_SOLVE_PATTERNS: RegExp[] = [
   /\b(find|calculate|compute|derive|prove|balance|integrate|differentiate|evaluate)\b.{0,100}\b(value|time|force|field|wavelength|pH|molarity|weight|product|ratio|area|dy\/dx|equation|formula|answer|acceleration|velocity|current|voltage)\b/i,
@@ -76,6 +78,8 @@ export function buildDeterministicMentorResponse(
     text = REFUSAL_MESSAGE;
   } else if (label === "out_of_scope") {
     text = OUT_OF_SCOPE_MESSAGE;
+  } else if (isBookRecommendationRequest(input.message)) {
+    text = buildBookRecommendationUnavailableResponse(input.profile);
   } else if (label === "motivation") {
     text = buildMotivationResponse(input.profile);
   } else if (label === "plan_request") {
@@ -91,6 +95,24 @@ export function buildDeterministicMentorResponse(
   }
 
   return { text, label };
+}
+
+export function isBookRecommendationRequest(message: string): boolean {
+  return BOOK_RECOMMENDATION_PATTERN.test(message);
+}
+
+export function buildBookRecommendationUnavailableResponse(profile?: StudentProfile | null): string {
+  return `${studentLine(profile)}I cannot fetch live Physics Wallah publication listings right now, so I will not invent book names, prices, or links.
+
+For your numerical weakness, use a practice ladder instead of jumping between books:
+
+1. Revise the formula sheet and 2 to 3 solved examples for the exact chapter.
+2. Do only basic single-concept numericals first until accuracy becomes stable.
+3. Move to mixed PYQ-style practice in short timed sets of 10 to 15 questions.
+4. Keep an error log with three tags: concept gap, formula recall, calculation mistake.
+5. Repeat only the wrong-question pattern the next day before starting new questions.
+
+For buying material, check the official PW store/app for the current PW publication titles. Tell me your subject, chapter, and whether you are preparing for JEE Main or Advanced, and I will make you a chapter-wise practice plan.`;
 }
 
 function looksLikeAcademicSolve(message: string): boolean {

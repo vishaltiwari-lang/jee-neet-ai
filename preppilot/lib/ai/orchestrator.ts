@@ -6,7 +6,11 @@ import { validateOutput } from "./guardrails";
 import { detectSelfHarm } from "./safety";
 import { REFUSAL_MESSAGE, OUT_OF_SCOPE_MESSAGE, HELPLINE_MESSAGE, FALLBACK_MESSAGE } from "./refusal";
 import { getChatModelChain, openaiModel } from "./provider";
-import { buildDeterministicMentorResponse } from "./deterministic-mentor";
+import {
+  buildBookRecommendationUnavailableResponse,
+  buildDeterministicMentorResponse,
+  isBookRecommendationRequest,
+} from "./deterministic-mentor";
 import {
   aiProviderCircuitOpen,
   getAiProviderCircuitReason,
@@ -134,6 +138,7 @@ export async function orchestrate(input: OrchestratorInput): Promise<Orchestrato
   }
 
   const intent = await classifyIntent(message);
+  const bookSearchAvailable = pwBooksSearchAvailable();
 
   if (intent === "academic_solve") {
     const text = isSelfHarm ? `${HELPLINE_MESSAGE}\n\n---\n\n${REFUSAL_MESSAGE}` : REFUSAL_MESSAGE;
@@ -159,6 +164,18 @@ export async function orchestrate(input: OrchestratorInput): Promise<Orchestrato
     return { kind: "deterministic", conversationId, text, label: "out_of_scope", flagged: isSelfHarm };
   }
 
+  if (isBookRecommendationRequest(message) && !bookSearchAvailable) {
+    const baseText = buildBookRecommendationUnavailableResponse(profile);
+    const text = isSelfHarm ? `${HELPLINE_MESSAGE}\n\n---\n\n${baseText}` : baseText;
+    await safeAppendMessage(conversationId, {
+      role: "assistant",
+      content: text,
+      intentLabel: "strategy",
+      model: "deterministic",
+    });
+    return { kind: "deterministic", conversationId, text, label: "strategy", flagged: isSelfHarm };
+  }
+
   if (intent === "plan_request" || intent === "strategy") {
     const coverage = assessSyllabusCoverage(message, {
       class: profile.class,
@@ -180,7 +197,9 @@ export async function orchestrate(input: OrchestratorInput): Promise<Orchestrato
   }
 
   // Real LLM path
-  const systemPrompt = buildSystemPrompt(profile, rollingSummary ?? undefined);
+  const systemPrompt = buildSystemPrompt(profile, rollingSummary ?? undefined, {
+    pwBookSearchAvailable: bookSearchAvailable,
+  });
   const fullSystem = isSelfHarm
     ? `${systemPrompt}\n\nIMPORTANT CONTEXT: This student's message contained language suggesting distress or self-harm. Lead with empathy. Encourage them to reach out to iCall (9152987821). Be warm and brief — no lecturing.`
     : systemPrompt;
@@ -218,14 +237,22 @@ export async function orchestrate(input: OrchestratorInput): Promise<Orchestrato
     let refused = false;
     let label: IntentLabel = intent;
     if (!guard.ok) {
-      finalText = REFUSAL_MESSAGE;
-      refused = true;
-      label = "academic_solve";
-      await logRefusal({
-        userId,
-        messageExcerpt: `[guardrail] ${message}`,
-        reason: "guardrail",
-      });
+      if (guard.reason === "raw_tool_call") {
+        finalText = isBookRecommendationRequest(message)
+          ? buildBookRecommendationUnavailableResponse(profile)
+          : deterministicFallback.text;
+        refused = false;
+        label = isBookRecommendationRequest(message) ? "strategy" : deterministicFallback.label;
+      } else {
+        finalText = REFUSAL_MESSAGE;
+        refused = true;
+        label = "academic_solve";
+        await logRefusal({
+          userId,
+          messageExcerpt: `[guardrail] ${message}`,
+          reason: "guardrail",
+        });
+      }
     }
 
     const tokensIn = usage?.inputTokens ?? 0;
