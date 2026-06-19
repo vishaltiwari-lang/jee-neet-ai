@@ -3,6 +3,10 @@ import { buildSyllabusPromptSection } from "@/lib/knowledge/syllabus";
 
 type Profile = typeof studentProfiles.$inferSelect;
 
+export type SystemPromptOptions = {
+  pwBookSearchAvailable?: boolean;
+};
+
 function classLabel(c: Profile["class"]): string {
   switch (c) {
     case "class_11":
@@ -43,7 +47,29 @@ export function profileSummary(p: Profile): string {
   return lines.join("\n");
 }
 
-export function buildSystemPrompt(profile: Profile, rollingSummary?: string | null): string {
+function buildBookRecommendationPolicy(options?: SystemPromptOptions): string {
+  if (options?.pwBookSearchAvailable) {
+    return `BOOK RECOMMENDATION POLICY (strict)
+- When the student asks which book to buy, which study material/module to get, or what to purchase for a subject/exam, you MUST call the searchPwBooks tool and recommend ONLY the Physics Wallah (PW) publication books it returns.
+- Do NOT name or recommend books from other publishers (HC Verma, Cengage, DC Pandey, Allen modules, etc.) as purchase recommendations - only Physics Wallah publication titles. (NCERT may still be mentioned as the free baseline text.)
+- Use searchPwBooks ONLY for book/material purchase recommendations - never to solve problems, explain concepts, or build study plans.
+- Cite each recommended book with its title and store link from the tool results. If the tool returns no results, say so plainly and pivot to study strategy instead of inventing titles.
+- NEVER write manual tool-call markup, XML, JSON function calls, or text such as <tool_call>. Use the actual tool only.`;
+  }
+
+  return `BOOK RECOMMENDATION POLICY (strict)
+- Live Physics Wallah (PW) publication search is unavailable in this runtime.
+- If the student asks which book to buy, which study material/module to get, or what to purchase, DO NOT claim you are searching live listings and DO NOT invent book names, prices, or links.
+- Do NOT name or recommend books from other publishers (HC Verma, Cengage, DC Pandey, Allen modules, etc.) as purchase recommendations - only Physics Wallah publication titles are allowed when live PW results are available. (NCERT may still be mentioned as the free baseline text.)
+- NEVER write manual tool-call markup, XML, JSON function calls, function names, or text such as <tool_call> / searchPwBooks.
+- Say plainly that live PW publication lookup is unavailable right now, ask the student to check the official PW store for current titles, and pivot to the study/practice strategy they need.`;
+}
+
+export function buildSystemPrompt(
+  profile: Profile,
+  rollingSummary?: string | null,
+  options?: SystemPromptOptions,
+): string {
   const summarySection = rollingSummary
     ? `\n\nRECENT CONVERSATION SUMMARY\n${rollingSummary}\n`
     : "";
@@ -101,8 +127,10 @@ PROFESSOR MODE (for chapter doubts / concept difficulty)
   2) Standard approach patterns
   3) Common traps and error checks
   4) Daily practice loop (concept -> solved examples -> timed practice -> error review)
-- Recommend trusted resources only when useful: NCERT, HC Verma, Cengage (Math), DC Pandey, MS Chouhan, Narendra Awasthi, N. Avasthi, OP Tandon, Allen/Resonance modules, PYQ books.
-- Never claim a book is "best for everyone". Match recommendations to student's current level and available time.
+- NCERT is the official syllabus text and may always be cited as the baseline reading.
+- Never claim a book is "best for everyone". Match recommendations to the student's current level and available time.
+
+${buildBookRecommendationPolicy(options)}
 
 PLANNING FRAMEWORK (use when enough context is available)
 1. Daily study timetable

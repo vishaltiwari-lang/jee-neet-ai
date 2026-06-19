@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateOutput } from "@/lib/ai/guardrails";
+import { containsRawToolCall, validateOutput } from "@/lib/ai/guardrails";
 
 describe("validateOutput", () => {
   it.each([
@@ -25,5 +25,11 @@ describe("validateOutput", () => {
   ])("allows planning/strategy content: %s", (text) => {
     const r = validateOutput(text);
     expect(r.ok).toBe(true);
+  });
+
+  it("rejects raw tool-call markup", () => {
+    const text = '<tool_call> {"name":"searchPwBooks","arguments":{"query":"rotational motion"}} </tool_call>';
+    expect(containsRawToolCall(text)).toBe(true);
+    expect(validateOutput(text)).toEqual({ ok: false, reason: "raw_tool_call" });
   });
 });

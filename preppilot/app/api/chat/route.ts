@@ -7,10 +7,12 @@ import {
   type UIMessageChunk,
 } from "ai";
 import { z } from "zod";
-import { orchestrate, buildStreamText, FALLBACK_MESSAGE } from "@/lib/ai/orchestrator";
+import { orchestrate, streamAssistantText, FALLBACK_MESSAGE } from "@/lib/ai/orchestrator";
 import { resolveSubmittedMessage } from "@/lib/ai/chat-request";
 import { CHAT_REQUEST_HISTORY_LIMIT } from "@/lib/constants/chat";
 import { checkChatLimits } from "@/lib/ratelimit";
+import { aiProviderCircuitOpen, noteAiProviderFailure, summarizeAiError } from "@/lib/ai/provider-health";
+import { containsRawToolCall } from "@/lib/ai/guardrails";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,6 +32,18 @@ const BodySchema = z.object({
     .default([]),
 });
 
+const STREAM_GUARD_HOLD_CHARS = 240;
+
+class RawToolCallLeakError extends Error {
+  constructor() {
+    super("raw_tool_call_leak");
+  }
+}
+
+function isRawToolCallLeakError(error: unknown): boolean {
+  return error instanceof RawToolCallLeakError || (error instanceof Error && error.message === "raw_tool_call_leak");
+}
+
 function fallbackMessageStream(text = FALLBACK_MESSAGE, persist?: () => Promise<void>) {
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
@@ -42,6 +56,28 @@ function fallbackMessageStream(text = FALLBACK_MESSAGE, persist?: () => Promise<
   });
 
   return createUIMessageStreamResponse({ stream });
+}
+
+function writeTextMessage(writer: Parameters<Parameters<typeof createUIMessageStream>[0]["execute"]>[0]["writer"], text: string) {
+  const id = `msg-${Date.now()}`;
+  writer.write({ type: "text-start", id });
+  writer.write({ type: "text-delta", id, delta: text });
+  writer.write({ type: "text-end", id });
+}
+
+function isVisibleStreamChunk(chunk: UIMessageChunk): boolean {
+  return (
+    chunk.type === "text-delta" ||
+    chunk.type === "reasoning-delta" ||
+    chunk.type.startsWith("tool-") ||
+    chunk.type.startsWith("source-") ||
+    chunk.type === "file" ||
+    chunk.type.startsWith("data-")
+  );
+}
+
+function chunkError(chunk: UIMessageChunk, providerError: unknown): unknown {
+  return providerError ?? new Error(chunk.type === "error" ? chunk.errorText : "AI stream failed");
 }
 
 export async function POST(req: Request) {
@@ -98,68 +134,124 @@ export async function POST(req: Request) {
       });
     }
 
-    const streamResult = buildStreamText({
-      systemPrompt: result.systemPrompt,
-      modelMessages: result.modelMessages,
-      models: result.models,
-      onFinish: result.onFinish,
-    });
-
     const stream = createUIMessageStream({
       execute: async ({ writer }) => {
-        const providerStream = streamResult.toUIMessageStream({
-          onError: (error) => {
-            console.error("chat provider stream failed", error);
-            return FALLBACK_MESSAGE;
-          },
-        });
-        const reader = providerStream.getReader();
-        let activeTextId: string | null = null;
-        let textEnded = false;
-        let streamedText = "";
+        let deliveredProviderText = false;
 
-        const writeFallback = async () => {
-          const fallbackText = streamedText
-            ? `${streamedText}\n\n${FALLBACK_MESSAGE}`
-            : FALLBACK_MESSAGE;
+        for (const modelName of result.models) {
+          let providerError: unknown;
+          let streamedText = "";
+          let activeTextId: string | null = null;
+          let flushed = false;
+          const bufferedChunks: UIMessageChunk[] = [];
 
-          if (activeTextId && !textEnded) {
-            writer.write({ type: "text-delta", id: activeTextId, delta: `\n\n${FALLBACK_MESSAGE}` });
-            writer.write({ type: "text-end", id: activeTextId });
-          } else {
-            const id = `msg-${Date.now()}`;
-            writer.write({ type: "text-start", id });
-            writer.write({ type: "text-delta", id, delta: FALLBACK_MESSAGE });
-            writer.write({ type: "text-end", id });
-          }
+          try {
+            const streamResult = streamAssistantText({
+              systemPrompt: result.systemPrompt,
+              modelMessages: result.modelMessages,
+              model: modelName,
+            });
 
-          await result.onFinish(fallbackText, { inputTokens: 0, outputTokens: 0 }, "fallback");
-        };
+            const providerStream = streamResult.toUIMessageStream({
+              onError: (error) => {
+                providerError = error;
+                return "";
+              },
+            });
 
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+            const flushBuffered = () => {
+              if (flushed) return;
+              for (const chunk of bufferedChunks) {
+                writer.write(chunk);
+              }
+              bufferedChunks.length = 0;
+              flushed = true;
+            };
 
-            if (value.type === "error") {
-              await writeFallback();
+            for await (const chunk of providerStream) {
+              if (chunk.type === "error") {
+                throw chunkError(chunk, providerError);
+              }
+
+              if (chunk.type === "text-start") {
+                activeTextId = chunk.id;
+              } else if (chunk.type === "text-delta") {
+                streamedText += chunk.delta;
+                if (containsRawToolCall(streamedText)) {
+                  throw new RawToolCallLeakError();
+                }
+              } else if (chunk.type === "text-end" && chunk.id === activeTextId) {
+                activeTextId = null;
+              }
+
+              const shouldHoldForGuard =
+                chunk.type === "text-delta" && streamedText.length < STREAM_GUARD_HOLD_CHARS;
+
+              if (!flushed && (!isVisibleStreamChunk(chunk) || shouldHoldForGuard)) {
+                bufferedChunks.push(chunk);
+                continue;
+              }
+
+              flushBuffered();
+              writer.write(chunk);
+            }
+
+            if (!streamedText.trim()) {
+              continue;
+            }
+            flushBuffered();
+
+            let usage: { inputTokens?: number; outputTokens?: number } | undefined;
+            try {
+              usage = await streamResult.totalUsage;
+            } catch {
+              usage = undefined;
+            }
+            await result.onFinish(streamedText, usage, modelName);
+            deliveredProviderText = true;
+            return;
+          } catch (error) {
+            if (isRawToolCallLeakError(error)) {
+              console.error(`chat stream blocked raw tool-call output for model ${modelName}`);
+              const finalText = await result.onFinish(streamedText, undefined, `${modelName}:guarded`);
+              if (flushed && activeTextId) {
+                writer.write({ type: "text-delta", id: activeTextId, delta: `\n\n${finalText}` });
+                writer.write({ type: "text-end", id: activeTextId });
+              } else {
+                writeTextMessage(writer, finalText);
+              }
+              deliveredProviderText = true;
               return;
             }
 
-            if (value.type === "text-start") {
-              activeTextId = value.id;
-              textEnded = false;
-            } else if (value.type === "text-delta") {
-              streamedText += value.delta;
-            } else if (value.type === "text-end" && value.id === activeTextId) {
-              textEnded = true;
+            const summary = noteAiProviderFailure(error);
+            console.error(`chat stream failed for model ${modelName}`, summary);
+
+            if (flushed && streamedText.trim()) {
+              const interruption =
+                "\n\nPrepPilot had to stop this response early because the AI provider disconnected. Try again if you need the rest.";
+              if (activeTextId) {
+                writer.write({ type: "text-delta", id: activeTextId, delta: interruption });
+                writer.write({ type: "text-end", id: activeTextId });
+              } else {
+                writeTextMessage(writer, interruption.trim());
+              }
+              await result.onFinish(`${streamedText}${interruption}`, undefined, `${modelName}:partial`);
+              deliveredProviderText = true;
+              return;
             }
 
-            writer.write(value as UIMessageChunk);
+            if (aiProviderCircuitOpen()) break;
           }
-        } catch (error) {
-          console.error("chat stream relay failed", error);
-          await writeFallback();
+        }
+
+        if (!deliveredProviderText) {
+          console.error(
+            "chat provider unavailable; using deterministic fallback",
+            summarizeAiError(new Error("No chat model streamed text")),
+          );
+          const finalText = await result.onFinish(result.fallbackText, undefined, "deterministic-fallback");
+          writeTextMessage(writer, finalText);
         }
       },
     });

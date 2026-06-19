@@ -53,6 +53,19 @@ describe("buildSystemPrompt", () => {
     expect(s).toContain("PrepPilot");
   });
 
+  it("does not ask for the PW search tool when it is unavailable", () => {
+    const s = buildSystemPrompt(baseProfile);
+    expect(s).toContain("Live Physics Wallah (PW) publication search is unavailable");
+    expect(s).toContain("NEVER write manual tool-call markup");
+    expect(s).not.toContain("you MUST call the searchPwBooks tool");
+  });
+
+  it("requires real PW tool use only when the search tool is available", () => {
+    const s = buildSystemPrompt(baseProfile, null, { pwBookSearchAvailable: true });
+    expect(s).toContain("you MUST call the searchPwBooks tool");
+    expect(s).toContain("Use the actual tool only");
+  });
+
   it("includes rolling summary when provided", () => {
     const s = buildSystemPrompt(baseProfile, "We discussed Physics revision for Week 1.");
     expect(s).toContain("RECENT CONVERSATION SUMMARY");

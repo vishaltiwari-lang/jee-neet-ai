@@ -5,7 +5,7 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { AlertTriangle, Bookmark, Bot, Loader2, RefreshCcw, Send, Sparkles, Square, UserRound } from "lucide-react";
+import { AlertTriangle, Bookmark, BookOpen, Bot, Loader2, RefreshCcw, Send, Sparkles, Square, UserRound } from "lucide-react";
 import Markdown from "@/components/chat/Markdown";
 import NewChatButton from "@/components/chat/NewChatButton";
 import { getPromptsForClass, type StudentClass } from "@/lib/constants/suggestedPrompts";
@@ -258,6 +258,15 @@ export default function ChatWindow({
 
   const isStreaming = status === "submitted" || status === "streaming";
   const canSend = input.trim().length > 0 && !isStreaming;
+
+  // Show "Thinking..." until the assistant produces text or a visible tool
+  // pill, so there's never a bare avatar with nothing in it.
+  const lastMessage = messages[messages.length - 1];
+  const showThinking =
+    lastMessage?.role === "user" ||
+    (lastMessage?.role === "assistant" &&
+      messageText(lastMessage).trim() === "" &&
+      !lastMessage.parts.some((p) => String((p as { type?: string }).type).startsWith("tool-")));
   const profileLabel = profileClass.replace("_", " ");
 
   const pickPrompt = React.useCallback((prompt: string) => {
@@ -335,7 +344,7 @@ export default function ChatWindow({
             <MessageBubble key={m.id} message={m} onSavePlan={() => savePlan(m)} />
           ))}
 
-          {isStreaming && messages[messages.length - 1]?.role === "user" && (
+          {isStreaming && showThinking && (
             <div className="flex items-center gap-3 text-sm text-muted-foreground">
               <span className="grid h-8 w-8 place-items-center rounded-md bg-white shadow-sm dark:bg-card">
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -446,15 +455,18 @@ function MessageBubble({ message, onSavePlan }: { message: UIMessage; onSavePlan
         <Bot className="h-4 w-4" />
       </span>
       <div className="min-w-0 flex-1">
-        <div
-          className={cn(
-            "rounded-md border bg-white px-4 py-3 shadow-sm dark:bg-card",
-            isRefusal ? "border-amber-300/70 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30" : "border-black/10 dark:border-white/10",
-          )}
-        >
-          <Markdown>{text}</Markdown>
-        </div>
-        {looksLikePlan && (
+        <ToolActivity message={message} />
+        {text && (
+          <div
+            className={cn(
+              "rounded-md border bg-white px-4 py-3 shadow-sm dark:bg-card",
+              isRefusal ? "border-amber-300/70 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30" : "border-black/10 dark:border-white/10",
+            )}
+          >
+            <Markdown>{text}</Markdown>
+          </div>
+        )}
+        {looksLikePlan && text && (
           <div className="mt-2 flex justify-end">
             <Button size="sm" variant="outline" onClick={onSavePlan} className="bg-white dark:bg-card">
               <Bookmark className="h-3.5 w-3.5" /> Save plan
@@ -462,6 +474,52 @@ function MessageBubble({ message, onSavePlan }: { message: UIMessage; onSavePlan
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+type ToolUIPart = {
+  type: string;
+  state?: string;
+  output?: { available?: boolean; results?: unknown[] };
+};
+
+/**
+ * Renders the agent's tool calls (currently the Physics Wallah book search) as
+ * inline status pills, so the chat visibly behaves like an agent instead of a
+ * plain text stream. Tool parts are only present on the live, in-flight message
+ * — historical messages reloaded from the DB are text-only, so this is silent
+ * for past turns.
+ */
+function ToolActivity({ message }: { message: UIMessage }) {
+  const toolParts = (message.parts as ToolUIPart[]).filter(
+    (p) => typeof p.type === "string" && p.type.startsWith("tool-"),
+  );
+  if (toolParts.length === 0) return null;
+
+  return (
+    <div className="mb-2 flex flex-wrap gap-2">
+      {toolParts.map((p, i) => {
+        const done = p.state === "output-available";
+        const unavailable = done && p.output?.available === false;
+        const count = Array.isArray(p.output?.results) ? p.output!.results!.length : 0;
+        const label = !done
+          ? "Searching the Physics Wallah store…"
+          : unavailable
+            ? "Book search unavailable"
+            : count > 0
+              ? `Found ${count} Physics Wallah book${count === 1 ? "" : "s"}`
+              : "No Physics Wallah books found";
+        return (
+          <span
+            key={i}
+            className="inline-flex items-center gap-1.5 rounded-full border border-black/10 bg-white px-2.5 py-1 text-xs font-medium text-muted-foreground shadow-sm dark:border-white/10 dark:bg-card"
+          >
+            {done ? <BookOpen className="h-3 w-3" /> : <Loader2 className="h-3 w-3 animate-spin" />}
+            {label}
+          </span>
+        );
+      })}
     </div>
   );
 }
